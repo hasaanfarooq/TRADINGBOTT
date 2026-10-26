@@ -409,8 +409,356 @@ class Backtester:
         self.contract_size = contract_size
         self.risk_per_trade_pct = risk_per_trade_pct
 
+    def _run_tick_scalper(self) -> Dict[str, Any]:
+        """
+        High-frequency tick-by-tick simulation engine for Tick Momentum Scalper.
+        Rides micro-bursts, scales in up to 20 positions, enforces $1-2 TP,
+        $2-3 hard SL, 30-60s time decay, $15 basket stop, London/NY session,
+        tight spread, and 1M 50 EMA trend alignment.
+        """
+        # Determine tick dataset
+        df_ticks = self.params.get("df_ticks", None)
+        if df_ticks is None or len(df_ticks) < 50:
+            if self.raw_data is not None and "bid" in self.raw_data.columns and "ask" in self.raw_data.columns:
+                df_ticks = self.raw_data.copy()
+            elif self.raw_data is not None and len(self.raw_data) >= 10:
+                # Synthesize micro-ticks from OHLC bars if raw ticks were not provided
+                t_rows = []
+                pip = self.pip_size
+                spread_val = self.spread_pips * pip
+                for _, row in self.raw_data.iterrows():
+                    b_time = row["time"]
+                    o = float(row["open"])
+                    h = float(row["high"])
+                    l = float(row["low"])
+                    c = float(row["close"])
+                    seq = [o, l, h, c] if c >= o else [o, h, l, c]
+                    base_msc = int(pd.to_datetime(b_time).timestamp() * 1000)
+                    for idx_t, p_val in enumerate(seq):
+                        t_msc = base_msc + (idx_t * 15000)
+                        t_rows.append({
+                            "time_msc": t_msc,
+                            "time_dt": pd.to_datetime(t_msc, unit="ms"),
+                            "bid": p_val,
+                            "ask": round(p_val + spread_val, 5),
+                            "last": p_val
+                        })
+                df_ticks = pd.DataFrame(t_rows)
+            else:
+                return {"error": "Insufficient tick or bar data to execute Tick Momentum Scalper."}
+
+        if "time_dt" not in df_ticks.columns:
+            if "time_msc" in df_ticks.columns:
+                df_ticks["time_dt"] = pd.to_datetime(df_ticks["time_msc"], unit="ms")
+            else:
+                df_ticks["time_dt"] = pd.to_datetime(df_ticks["time"])
+
+        # 1-Minute 50 EMA Trend Filter
+        df_m1 = self.params.get("df_m1", None)
+        if df_m1 is not None and len(df_m1) > 10:
+            m1 = df_m1.copy()
+            if "time_dt" not in m1.columns:
+                if isinstance(m1["time"].iloc[0], (int, float)):
+                    m1["time_dt"] = pd.to_datetime(m1["time"], unit="s")
+                else:
+                    m1["time_dt"] = pd.to_datetime(m1["time"])
+            m1["ema50"] = m1["close"].ewm(span=50, adjust=False).mean()
+            df_ticks = pd.merge_asof(
+                df_ticks.sort_values("time_dt"),
+                m1[["time_dt", "ema50"]].sort_values("time_dt"),
+                on="time_dt",
+                direction="backward"
+            )
+        else:
+            df_ticks["ema50"] = df_ticks["bid"].ewm(span=500, adjust=False).mean()
+
+        # Strategy Parameters
+        target_profit_usd = float(self.params.get("target_profit_usd", 1.50))
+        stop_loss_usd = float(self.params.get("stop_loss_usd", 2.50))
+        max_hold_sec = float(self.params.get("max_hold_seconds", 45.0))
+        max_positions = int(self.params.get("max_positions", 10))
+        cooldown_ms = int(self.params.get("cooldown_ms", 500))
+        burst_ticks = int(self.params.get("burst_ticks", 10))
+        burst_agreement = float(self.params.get("burst_agreement", 0.70))
+        min_burst_pips = float(self.params.get("min_burst_pips", 0.8))
+        max_spread_pips = float(self.params.get("max_spread_pips", 1.5))
+        basket_stop_usd = float(self.params.get("basket_stop_usd", 15.0))
+        basket_pause_sec = int(self.params.get("basket_pause_sec", 600))
+        max_consec_losses = int(self.params.get("max_consec_losses", 5))
+        daily_loss_cap = float(self.params.get("daily_loss_cap", 50.0))
+
+        # Dynamic or fixed lot sizing
+        if self.lot_size and self.lot_size > 0:
+            pos_lot = self.lot_size
+        else:
+            # Scaled micro-lot calibrated to capital
+            pos_lot = max(0.01, round(self.initial_capital * 0.00001, 2))
+
+        balance = self.initial_capital
+        peak_balance = self.initial_capital
+        max_drawdown_dollar = 0.0
+        max_drawdown_pct = 0.0
+
+        trades: List[Dict[str, Any]] = []
+        positions: List[Dict[str, Any]] = []
+
+        last_entry_time_msc = 0
+        basket_pause_until_msc = 0
+        consec_losses = 0
+        curr_day = None
+        daily_loss = 0.0
+
+        bids = df_ticks["bid"].values
+        asks = df_ticks["ask"].values
+        time_mscs = df_ticks["time_msc"].values
+        ema50s = df_ticks["ema50"].values
+        time_dts = df_ticks["time_dt"]
+        hours = time_dts.dt.hour.values
+        days = time_dts.dt.day.values
+
+        n = len(df_ticks)
+        for i in range(burst_ticks, n):
+            t_msc = time_mscs[i]
+            bid = bids[i]
+            ask = asks[i]
+            spread_pips = (ask - bid) / self.pip_size
+            hr = hours[i]
+            d = days[i]
+            ema = ema50s[i]
+
+            # Daily Loss Cap Reset on day boundary
+            if d != curr_day:
+                curr_day = d
+                daily_loss = 0.0
+
+            # 1. Manage Active Positions Tick by Tick
+            if positions:
+                total_floating_usd = 0.0
+                still_open = []
+                for p in positions:
+                    p_type = p["type"]
+                    entry_p = p["entry_price"]
+                    hold_sec = (t_msc - p["entry_time_msc"]) / 1000.0
+
+                    if p_type == "BUY":
+                        diff = bid - entry_p
+                    else:
+                        diff = entry_p - ask
+
+                    pnl = diff * p["lot_size"] * self.contract_size
+                    total_floating_usd += pnl
+
+                    exit_reason = None
+                    exit_price = bid if p_type == "BUY" else ask
+
+                    if pnl >= target_profit_usd:
+                        exit_reason = f"Take Profit (+${pnl:.2f})"
+                    elif pnl <= -stop_loss_usd:
+                        exit_reason = f"Stop Loss (-${abs(pnl):.2f})"
+                    elif hold_sec >= max_hold_sec:
+                        exit_reason = f"Time Decay ({hold_sec:.0f}s)"
+
+                    if exit_reason:
+                        balance += pnl
+                        if pnl < 0:
+                            daily_loss += abs(pnl)
+                            consec_losses += 1
+                        else:
+                            consec_losses = 0
+
+                        if balance > peak_balance:
+                            peak_balance = balance
+                        dd_dlr = peak_balance - balance
+                        dd_p = (dd_dlr / peak_balance) * 100 if peak_balance > 0 else 0
+                        if dd_dlr > max_drawdown_dollar:
+                            max_drawdown_dollar = dd_dlr
+                        if dd_p > max_drawdown_pct:
+                            max_drawdown_pct = dd_p
+
+                        trades.append({
+                            "id": len(trades) + 1,
+                            "type": p_type,
+                            "lot_size": p["lot_size"],
+                            "entry_time": p["entry_time_str"],
+                            "entry_price": round(entry_p, 5),
+                            "exit_time": str(time_dts.iloc[i]),
+                            "exit_price": round(exit_price, 5),
+                            "pips": round(diff / self.pip_size, 1),
+                            "pnl": round(pnl, 2),
+                            "pnl_pct": round((pnl / self.initial_capital) * 100, 2),
+                            "balance": round(balance, 2),
+                            "reason": exit_reason,
+                            "score": 90,
+                            "thesis": "Tick Burst Momentum"
+                        })
+                    else:
+                        still_open.append(p)
+
+                positions = still_open
+
+                # Basket Stop Loss: Close ALL positions if total floating loss exceeds basket limit
+                if total_floating_usd <= -basket_stop_usd:
+                    for p in positions:
+                        p_type = p["type"]
+                        entry_p = p["entry_price"]
+                        exit_price = bid if p_type == "BUY" else ask
+                        diff = (exit_price - entry_p) if p_type == "BUY" else (entry_p - exit_price)
+                        pnl = diff * p["lot_size"] * self.contract_size
+                        balance += pnl
+                        daily_loss += max(0, -pnl)
+
+                        if balance > peak_balance:
+                            peak_balance = balance
+                        dd_dlr = peak_balance - balance
+                        dd_p = (dd_dlr / peak_balance) * 100 if peak_balance > 0 else 0
+                        if dd_dlr > max_drawdown_dollar:
+                            max_drawdown_dollar = dd_dlr
+                        if dd_p > max_drawdown_pct:
+                            max_drawdown_pct = dd_p
+
+                        trades.append({
+                            "id": len(trades) + 1,
+                            "type": p_type,
+                            "lot_size": p["lot_size"],
+                            "entry_time": p["entry_time_str"],
+                            "entry_price": round(entry_p, 5),
+                            "exit_time": str(time_dts.iloc[i]),
+                            "exit_price": round(exit_price, 5),
+                            "pips": round(diff / self.pip_size, 1),
+                            "pnl": round(pnl, 2),
+                            "pnl_pct": round((pnl / self.initial_capital) * 100, 2),
+                            "balance": round(balance, 2),
+                            "reason": "Basket Stop Loss",
+                            "score": 90,
+                            "thesis": "Circuit Breaker Protection"
+                        })
+                    positions = []
+                    basket_pause_until_msc = t_msc + (basket_pause_sec * 1000)
+                    consec_losses += 1
+
+            # 2. Entry Safeguard Filters
+            if t_msc < basket_pause_until_msc:
+                continue
+            if consec_losses >= max_consec_losses:
+                continue
+            if daily_loss >= daily_loss_cap:
+                continue
+            if len(positions) >= max_positions:
+                continue
+            if (t_msc - last_entry_time_msc) < cooldown_ms:
+                continue
+            if spread_pips > max_spread_pips:
+                continue
+            # Session filter: London Open & NY Overlap (07:00 to 17:00 UTC)
+            if hr < 7 or hr >= 17:
+                continue
+            # Rollover avoidance (21:00 to 23:00 UTC)
+            if hr >= 21 and hr <= 23:
+                continue
+            if np.isnan(ema):
+                continue
+
+            # 3. Momentum Burst Calculation (last N ticks)
+            mids = (bids[i-burst_ticks : i+1] + asks[i-burst_ticks : i+1]) * 0.5
+            deltas = np.diff(mids)
+            up_ticks = np.sum(deltas > 0)
+            down_ticks = np.sum(deltas < 0)
+            total_active = up_ticks + down_ticks
+            if total_active < (burst_ticks * 0.7):
+                continue
+
+            net_disp_pips = (mids[-1] - mids[0]) / self.pip_size
+
+            # BUY Entry
+            if (up_ticks / total_active) >= burst_agreement and net_disp_pips >= min_burst_pips and ask > ema:
+                positions.append({
+                    "id": len(trades) + len(positions) + 1,
+                    "type": "BUY",
+                    "lot_size": pos_lot,
+                    "entry_price": ask,
+                    "entry_time_str": str(time_dts.iloc[i]),
+                    "entry_time_msc": t_msc
+                })
+                last_entry_time_msc = t_msc
+
+            # SELL Entry
+            elif (down_ticks / total_active) >= burst_agreement and net_disp_pips <= -min_burst_pips and bid < ema:
+                positions.append({
+                    "id": len(trades) + len(positions) + 1,
+                    "type": "SELL",
+                    "lot_size": pos_lot,
+                    "entry_price": bid,
+                    "entry_time_str": str(time_dts.iloc[i]),
+                    "entry_time_msc": t_msc
+                })
+                last_entry_time_msc = t_msc
+
+        # Close any residual open positions at end of data
+        for p in positions:
+            p_type = p["type"]
+            entry_p = p["entry_price"]
+            exit_price = bids[-1] if p_type == "BUY" else asks[-1]
+            diff = (exit_price - entry_p) if p_type == "BUY" else (entry_p - exit_price)
+            pnl = diff * p["lot_size"] * self.contract_size
+            balance += pnl
+            trades.append({
+                "id": len(trades) + 1,
+                "type": p_type,
+                "lot_size": p["lot_size"],
+                "entry_time": p["entry_time_str"],
+                "entry_price": round(entry_p, 5),
+                "exit_time": str(time_dts.iloc[-1]),
+                "exit_price": round(exit_price, 5),
+                "pips": round(diff / self.pip_size, 1),
+                "pnl": round(pnl, 2),
+                "pnl_pct": round((pnl / self.initial_capital) * 100, 2),
+                "balance": round(balance, 2),
+                "reason": "End of Data",
+                "score": 90,
+                "thesis": "Tick Burst"
+            })
+
+        # Calculate final metrics
+        total_trades = len(trades)
+        wins = [t for t in trades if t["pnl"] > 0]
+        losses = [t for t in trades if t["pnl"] <= 0]
+        win_count = len(wins)
+        loss_count = len(losses)
+        win_rate = (win_count / total_trades * 100) if total_trades > 0 else 0.0
+
+        total_profit = sum(t["pnl"] for t in wins)
+        total_loss = abs(sum(t["pnl"] for t in losses))
+        profit_factor = (total_profit / total_loss) if total_loss > 0 else (99.0 if total_profit > 0 else 1.0)
+        net_profit = balance - self.initial_capital
+        roi_pct = (net_profit / self.initial_capital) * 100
+
+        avg_win = (total_profit / win_count) if win_count > 0 else 0.0
+        avg_loss = (total_loss / loss_count) if loss_count > 0 else 0.0
+
+        return {
+            "initial_capital": self.initial_capital,
+            "final_balance": round(balance, 2),
+            "net_profit": round(net_profit, 2),
+            "roi_pct": round(roi_pct, 2),
+            "total_trades": total_trades,
+            "winning_trades": win_count,
+            "losing_trades": loss_count,
+            "filtered_count": 0,
+            "rejected_trades": [],
+            "win_rate": round(win_rate, 2),
+            "profit_factor": round(profit_factor, 2),
+            "max_drawdown_dollar": round(max_drawdown_dollar, 2),
+            "max_drawdown_pct": round(max_drawdown_pct, 2),
+            "avg_win": round(avg_win, 2),
+            "avg_loss": round(avg_loss, 2),
+            "trades": trades
+        }
+
     def run(self) -> Dict[str, Any]:
-        """Execute simulation across all bars."""
+        """Execute simulation across all bars or ticks."""
+        if self.strategy_name == "Tick Momentum Scalper":
+            return self._run_tick_scalper()
+
         if self.raw_data is None or len(self.raw_data) < 30:
             return {
                 "error": "Insufficient historical bars to execute backtest (minimum 30 bars required)."

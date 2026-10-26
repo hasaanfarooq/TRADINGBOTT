@@ -5,7 +5,7 @@ Executes rule-based algorithmic strategies on real MT5 historical data.
 
 import sys
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from typing import List, Dict, Any, Optional
@@ -13,7 +13,7 @@ import pandas as pd
 import MetaTrader5 as mt5
 
 from core.backtester import Backtester
-from gui.data_tab import TIMEFRAME_MAP, YEAR_OPTIONS
+from gui.data_tab import TIMEFRAME_MAP, YEAR_OPTIONS, PERIOD_OPTIONS
 
 TF_MINUTES = {
     mt5.TIMEFRAME_M1: 1,
@@ -154,17 +154,37 @@ class BacktestingTab(tk.Frame):
         self.combo_tf.bind("<<ComboboxSelected>>", self._on_timeframe_change)
         self.combo_tf.pack(fill="x", pady=(2, 0))
 
-        # Target Year
-        tk.Label(body, text="Historical Period (Real Year)", font=(FONT_FAMILY, 8), fg="#6B7280", bg="#FFFFFF").pack(anchor="w")
-        self.combo_year = ttk.Combobox(body, values=YEAR_OPTIONS, font=(FONT_FAMILY, 9), state="readonly")
-        self.combo_year.set("2024")
-        self.combo_year.pack(fill="x", pady=(2, 8))
+        # Historical Period Selection (Days, Weeks, Months, Years)
+        tk.Label(body, text="HISTORICAL PERIOD (DAYS / WEEKS / MONTHS)", font=(FONT_FAMILY, 8, "bold"), fg="#2563EB", bg="#FFFFFF").pack(anchor="w", pady=(0, 4))
+        self.combo_period = ttk.Combobox(body, values=PERIOD_OPTIONS, font=(FONT_FAMILY, 9), state="readonly")
+        self.combo_period.set("Last 1 Week")
+        self.combo_period.bind("<<ComboboxSelected>>", self._on_period_change)
+        self.combo_period.pack(fill="x", pady=(0, 4))
+
+        # Start and End Date Inputs (Auto-filled by period or editable for custom range)
+        row_dates = tk.Frame(body, bg="#FFFFFF")
+        row_dates.pack(fill="x", pady=(0, 8))
+
+        f_dfrom = tk.Frame(row_dates, bg="#FFFFFF")
+        f_dfrom.pack(side="left", fill="x", expand=True, padx=(0, 3))
+        tk.Label(f_dfrom, text="Start Date", font=(FONT_FAMILY, 7), fg="#6B7280", bg="#FFFFFF").pack(anchor="w")
+        self.entry_date_from = ttk.Entry(f_dfrom, font=(FONT_FAMILY, 8))
+        self.entry_date_from.pack(fill="x", pady=(1, 0))
+
+        f_dto = tk.Frame(row_dates, bg="#FFFFFF")
+        f_dto.pack(side="right", fill="x", expand=True, padx=(3, 0))
+        tk.Label(f_dto, text="End Date", font=(FONT_FAMILY, 7), fg="#6B7280", bg="#FFFFFF").pack(anchor="w")
+        self.entry_date_to = ttk.Entry(f_dto, font=(FONT_FAMILY, 8))
+        self.entry_date_to.pack(fill="x", pady=(1, 0))
+
+        self._update_period_dates("Last 1 Week")
 
         # Strategy Selection
         tk.Label(body, text="ALGORITHMIC STRATEGY (RULE-BASED)", font=(FONT_FAMILY, 8, "bold"), fg="#2563EB", bg="#FFFFFF").pack(anchor="w", pady=(0, 4))
         self.combo_strategy = ttk.Combobox(
             body,
             values=[
+                "Tick Momentum Scalper",
                 "CRT Range + CISD/FVG (A++ Institutional)",
                 "HTF Bias + Fib 0.77-0.78 OTE",
                 "EMA Crossover",
@@ -175,14 +195,14 @@ class BacktestingTab(tk.Frame):
             font=(FONT_FAMILY, 9),
             state="readonly"
         )
-        self.combo_strategy.set("CRT Range + CISD/FVG (A++ Institutional)")
+        self.combo_strategy.set("Tick Momentum Scalper")
         self.combo_strategy.bind("<<ComboboxSelected>>", self._on_strategy_change)
         self.combo_strategy.pack(fill="x", pady=(2, 8))
 
         # Dynamic Strategy Params Frame
         self.f_strat_params = tk.Frame(body, bg="#F9FAFB", highlightbackground="#E5E7EB", highlightthickness=1, padx=8, pady=6)
         self.f_strat_params.pack(fill="x", pady=(0, 8))
-        self._render_strategy_params("CRT Range + CISD/FVG (A++ Institutional)")
+        self._render_strategy_params("Tick Momentum Scalper")
 
         # Capital Specification (The ONLY user-controlled parameter)
         tk.Label(body, text="CAPITAL ALLOCATION (USER INPUT)", font=(FONT_FAMILY, 8, "bold"), fg="#2563EB", bg="#FFFFFF").pack(anchor="w", pady=(0, 4))
@@ -271,12 +291,108 @@ class BacktestingTab(tk.Frame):
                         else:
                             w.set(valid_options[0])
 
+    def _update_period_dates(self, period_sel: str):
+        """Calculates and populates the start and end date entry fields based on chosen period."""
+        now = datetime.now(timezone.utc)
+        if period_sel == "Last 1 Day":
+            d_from = now - timedelta(days=1)
+            d_to = now
+        elif period_sel == "Last 3 Days":
+            d_from = now - timedelta(days=3)
+            d_to = now
+        elif period_sel == "Last 1 Week":
+            d_from = now - timedelta(days=7)
+            d_to = now
+        elif period_sel == "Last 2 Weeks":
+            d_from = now - timedelta(days=14)
+            d_to = now
+        elif period_sel == "Last 1 Month":
+            d_from = now - timedelta(days=30)
+            d_to = now
+        elif period_sel == "Last 3 Months":
+            d_from = now - timedelta(days=90)
+            d_to = now
+        elif period_sel == "Last 6 Months":
+            d_from = now - timedelta(days=180)
+            d_to = now
+        elif period_sel.startswith("Year ") or (period_sel.isdigit() and len(period_sel) == 4):
+            y_str = period_sel.replace("Year ", "").strip()
+            y_int = int(y_str) if y_str.isdigit() else 2024
+            d_from = datetime(y_int, 1, 1, tzinfo=timezone.utc)
+            d_to = datetime(y_int, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+        elif period_sel == "Custom Date Range":
+            return
+        else:
+            d_from = now - timedelta(days=7)
+            d_to = now
+
+        if hasattr(self, "entry_date_from"):
+            self.entry_date_from.delete(0, tk.END)
+            self.entry_date_from.insert(0, d_from.strftime("%Y-%m-%d"))
+        if hasattr(self, "entry_date_to"):
+            self.entry_date_to.delete(0, tk.END)
+            self.entry_date_to.insert(0, d_to.strftime("%Y-%m-%d"))
+
+    def _on_period_change(self, event=None):
+        period_sel = self.combo_period.get()
+        self._update_period_dates(period_sel)
+
     def _on_strategy_change(self, event=None):
         self._render_strategy_params(self.combo_strategy.get())
 
     def _render_strategy_params(self, strategy: str):
         for child in self.f_strat_params.winfo_children():
             child.destroy()
+
+        if strategy == "Tick Momentum Scalper":
+            row_badge = tk.Frame(self.f_strat_params, bg="#F9FAFB")
+            row_badge.pack(fill="x", pady=(0, 4))
+            tk.Label(row_badge, text="Tick Momentum Scalper", font=(FONT_FAMILY, 8, "bold"), fg="#2563EB", bg="#F9FAFB").pack(side="left")
+            tk.Label(row_badge, text="Sub-Second Micro Burst", font=(FONT_FAMILY, 8, "bold"), fg="#059669", bg="#F9FAFB").pack(side="right")
+
+            row1 = tk.Frame(self.f_strat_params, bg="#F9FAFB")
+            row1.pack(fill="x", pady=(0, 3))
+
+            f_tp = tk.Frame(row1, bg="#F9FAFB")
+            f_tp.pack(side="left", fill="x", expand=True, padx=(0, 2))
+            tk.Label(f_tp, text="Target Profit ($)", font=(FONT_FAMILY, 7, "bold"), fg="#16A34A", bg="#F9FAFB").pack(anchor="w")
+            self.param_tms_tp = ttk.Combobox(f_tp, values=["$1.00", "$1.50", "$2.00", "$2.50", "$3.00"], font=(FONT_FAMILY, 8), state="readonly")
+            self.param_tms_tp.set("$1.50")
+            self.param_tms_tp.pack(fill="x", pady=(1, 0))
+
+            f_sl = tk.Frame(row1, bg="#F9FAFB")
+            f_sl.pack(side="right", fill="x", expand=True, padx=(2, 0))
+            tk.Label(f_sl, text="Hard Stop Loss ($)", font=(FONT_FAMILY, 7, "bold"), fg="#DC2626", bg="#F9FAFB").pack(anchor="w")
+            self.param_tms_sl = ttk.Combobox(f_sl, values=["$1.50", "$2.00", "$2.50", "$3.00", "$4.00"], font=(FONT_FAMILY, 8), state="readonly")
+            self.param_tms_sl.set("$2.50")
+            self.param_tms_sl.pack(fill="x", pady=(1, 0))
+
+            row2 = tk.Frame(self.f_strat_params, bg="#F9FAFB")
+            row2.pack(fill="x", pady=(3, 3))
+
+            f_pos = tk.Frame(row2, bg="#F9FAFB")
+            f_pos.pack(side="left", fill="x", expand=True, padx=(0, 2))
+            tk.Label(f_pos, text="Max Scale-In (Positions)", font=(FONT_FAMILY, 7, "bold"), fg="#374151", bg="#F9FAFB").pack(anchor="w")
+            self.param_tms_max_pos = ttk.Combobox(f_pos, values=["5", "10", "15", "20"], font=(FONT_FAMILY, 8), state="readonly")
+            self.param_tms_max_pos.set("10")
+            self.param_tms_max_pos.pack(fill="x", pady=(1, 0))
+
+            f_hold = tk.Frame(row2, bg="#F9FAFB")
+            f_hold.pack(side="right", fill="x", expand=True, padx=(2, 0))
+            tk.Label(f_hold, text="Stall Decay (Time Exit)", font=(FONT_FAMILY, 7, "bold"), fg="#D97706", bg="#F9FAFB").pack(anchor="w")
+            self.param_tms_hold = ttk.Combobox(f_hold, values=["30s", "45s", "60s"], font=(FONT_FAMILY, 8), state="readonly")
+            self.param_tms_hold.set("45s")
+            self.param_tms_hold.pack(fill="x", pady=(1, 0))
+
+            row3 = tk.Frame(self.f_strat_params, bg="#F9FAFB")
+            row3.pack(fill="x", pady=(3, 2))
+            tk.Label(row3, text="Basket Stop: -$15.00 limit", font=(FONT_FAMILY, 7, "bold"), fg="#991B1B", bg="#F9FAFB").pack(side="left")
+            tk.Label(row3, text="Breaker: 5 Losses Pause", font=(FONT_FAMILY, 7, "bold"), fg="#7C3AED", bg="#F9FAFB").pack(side="right")
+
+            row4 = tk.Frame(self.f_strat_params, bg="#F9FAFB")
+            row4.pack(fill="x", pady=(2, 0))
+            tk.Label(row4, text="Filter: London/NY 07-17 UTC | 1M 50 EMA", font=(FONT_FAMILY, 7), fg="#4B5563", bg="#F9FAFB").pack(anchor="w")
+            tk.Label(row4, text="Symbols: Liquid only (EURUSD, XAUUSD, US30, NAS100)", font=(FONT_FAMILY, 7), fg="#6B7280", bg="#F9FAFB").pack(anchor="w")
 
         if strategy == "CRT Range + CISD/FVG (A++ Institutional)":
             valid_htf = self._get_valid_htf_options()
@@ -556,16 +672,36 @@ class BacktestingTab(tk.Frame):
 
         symbol = self.combo_symbol.get().strip().upper()
         tf_name = self.combo_tf.get()
-        tf = TIMEFRAME_MAP.get(tf_name, mt5.TIMEFRAME_H1)
-        year_sel = self.combo_year.get()
+        tf = TIMEFRAME_MAP.get(tf_name, mt5.TIMEFRAME_M15)
+        period_name = self.combo_period.get() if hasattr(self, "combo_period") else "Last 1 Week"
 
+        # Determine d_from and d_to
         try:
-            year_int = int(year_sel) if year_sel != "Custom Range" else 2024
-        except ValueError:
-            year_int = 2024
-
-        d_from = datetime(year_int, 1, 1, tzinfo=timezone.utc)
-        d_to = datetime(year_int, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+            d_from_str = self.entry_date_from.get().strip()
+            d_to_str = self.entry_date_to.get().strip()
+            d_from = datetime.strptime(d_from_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            d_to = datetime.strptime(d_to_str, "%Y-%m-%d").replace(hour=23, minute=59, second=59, tzinfo=timezone.utc)
+            if d_from >= d_to:
+                raise ValueError("Start date must be earlier than End date.")
+        except Exception:
+            now = datetime.now(timezone.utc)
+            if period_name == "Last 1 Day":
+                d_from = now - timedelta(days=1)
+            elif period_name == "Last 3 Days":
+                d_from = now - timedelta(days=3)
+            elif period_name == "Last 1 Week":
+                d_from = now - timedelta(days=7)
+            elif period_name == "Last 2 Weeks":
+                d_from = now - timedelta(days=14)
+            elif period_name == "Last 1 Month":
+                d_from = now - timedelta(days=30)
+            elif period_name == "Last 3 Months":
+                d_from = now - timedelta(days=90)
+            elif period_name == "Last 6 Months":
+                d_from = now - timedelta(days=180)
+            else:
+                d_from = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            d_to = now
 
         # Capital parameter (User specifies ONLY capital)
         try:
@@ -644,10 +780,40 @@ class BacktestingTab(tk.Frame):
         elif strategy_name == "Bollinger Breakout":
             params["bb_period"] = self.param_bb_period.get()
             params["bb_std"] = self.param_bb_std.get()
+        elif strategy_name == "Tick Momentum Scalper":
+            try:
+                params["target_profit_usd"] = float(self.param_tms_tp.get().replace("$", ""))
+            except Exception:
+                params["target_profit_usd"] = 1.50
+
+            try:
+                params["stop_loss_usd"] = float(self.param_tms_sl.get().replace("$", ""))
+            except Exception:
+                params["stop_loss_usd"] = 2.50
+
+            try:
+                params["max_hold_seconds"] = float(self.param_tms_hold.get().replace("s", ""))
+            except Exception:
+                params["max_hold_seconds"] = 45.0
+
+            try:
+                params["max_positions"] = int(self.param_tms_max_pos.get())
+            except Exception:
+                params["max_positions"] = 10
+
+            params["cooldown_ms"] = 500
+            params["burst_ticks"] = 10
+            params["burst_agreement"] = 0.70
+            params["min_burst_pips"] = 0.8
+            params["max_spread_pips"] = 1.5
+            params["basket_stop_usd"] = 15.0
+            params["basket_pause_sec"] = 600
+            params["max_consec_losses"] = 5
+            params["daily_loss_cap"] = 50.0
 
         self.is_running = True
         self.btn_run.config(text="SIMULATING REAL DATA...", state="disabled", bg="#D97706")
-        self.log_callback(f"Starting Quantitative Backtest: {strategy_name} on {symbol} (Year: {year_sel})...", "INFO")
+        self.log_callback(f"Starting Quantitative Backtest: {strategy_name} on {symbol} ({period_name}: {d_from.strftime('%Y-%m-%d')} to {d_to.strftime('%Y-%m-%d')})...", "INFO")
 
         threading.Thread(
             target=self._threaded_backtest,
@@ -657,10 +823,27 @@ class BacktestingTab(tk.Frame):
 
     def _threaded_backtest(self, symbol, tf, d_from, d_to, strategy_name, params, capital, lot, sl, tp, spread, htf_tf=None):
         # 1. Fetch real historical data from MT5
-        df, msg = self.connector.fetch_historical_data(symbol, tf, d_from, d_to)
-        if df is None or len(df) == 0:
-            self.after(0, self._handle_backtest_error, f"Failed to fetch historical data: {msg}")
-            return
+        if strategy_name == "Tick Momentum Scalper":
+            self.log_callback(f"Tick Scalper: Fetching real millisecond broker ticks for {symbol}...", "INFO")
+            df_ticks, tick_msg = self.connector.fetch_ticks_range(symbol, d_from, d_to)
+            df_m1, _ = self.connector.fetch_historical_data(symbol, mt5.TIMEFRAME_M1, d_from, d_to)
+            params["df_m1"] = df_m1
+
+            if df_ticks is not None and len(df_ticks) > 50:
+                self.log_callback(f"Ingested {len(df_ticks):,} real broker ticks.", "SUCCESS")
+                params["df_ticks"] = df_ticks
+                df = df_ticks
+            elif df_m1 is not None and len(df_m1) > 0:
+                self.log_callback("Broker tick stream limited; utilizing 1M micro-tick emulation.", "WARNING")
+                df = df_m1
+            else:
+                self.after(0, self._handle_backtest_error, f"Failed to fetch tick or 1M data for {symbol}: {tick_msg}")
+                return
+        else:
+            df, msg = self.connector.fetch_historical_data(symbol, tf, d_from, d_to)
+            if df is None or len(df) == 0:
+                self.after(0, self._handle_backtest_error, f"Failed to fetch historical data: {msg}")
+                return
 
         # If multi-timeframe strategy or reasoning engine enabled, fetch HTF data
         if htf_tf is not None:
@@ -777,7 +960,8 @@ class BacktestingTab(tk.Frame):
                 tags=(tag,)
             )
 
-        self.lbl_trade_count.config(text=f"{len(trades)} Trades ({filtered_count} Filtered) on {total_bars:,} Bars")
+        unit_name = "Ticks" if strategy == "Tick Momentum Scalper" else "Bars"
+        self.lbl_trade_count.config(text=f"{len(trades)} Trades ({filtered_count} Filtered) on {total_bars:,} {unit_name}")
         self.log_callback(
             f"Backtest Finished: {strategy} | Net PnL: ${net_profit:,.2f} ({roi_pct:+.2f}%) | Win Rate: {win_rate:.1f}% | Approved: {total_trades} | Filtered Out: {filtered_count}",
             "SUCCESS" if net_profit >= 0 else "WARNING"
@@ -789,9 +973,9 @@ class BacktestingTab(tk.Frame):
 
         df_trades = pd.DataFrame(self.last_results["trades"])
         symbol = self.combo_symbol.get()
-        year = self.combo_year.get()
+        period_str = self.combo_period.get().replace(" ", "_") if hasattr(self, "combo_period") else "backtest"
         strat = self.combo_strategy.get().replace(" ", "_")
-        default_name = f"Backtest_{symbol}_{year}_{strat}_trades.csv"
+        default_name = f"Backtest_{symbol}_{period_str}_{strat}_trades.csv"
 
         filepath = filedialog.asksaveasfilename(
             defaultextension=".csv",

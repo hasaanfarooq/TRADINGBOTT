@@ -26,6 +26,20 @@ TIMEFRAME_MAP = {
 
 YEAR_OPTIONS = ["2026", "2025", "2024", "2023", "2022", "2021", "2020", "2019", "2018", "Custom Range"]
 
+PERIOD_OPTIONS = [
+    "Last 1 Day",
+    "Last 3 Days",
+    "Last 1 Week",
+    "Last 2 Weeks",
+    "Last 1 Month",
+    "Last 3 Months",
+    "Last 6 Months",
+    "Year 2025",
+    "Year 2024",
+    "Year 2023",
+    "Custom Date Range"
+]
+
 
 class HistoricalDataTab(tk.Frame):
     """View for querying, displaying, and exporting real MT5 historical data."""

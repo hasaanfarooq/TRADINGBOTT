@@ -254,9 +254,19 @@ The GUI uses a custom light theme built on the `clam` ttk engine:
 
 #### Tab 3: Quantitative Backtester
 - **Controls**:
-  - Target Symbol, Timeframe, and Year.
-  - Strategy selector (HTF Bias + Fib 0.77-0.78 OTE, EMA Crossover, RSI Reversion, MACD Momentum, Bollinger Breakout).
-  - Dynamic parameter inputs with Quantitative Confluence Scoring threshold.
+  - Target Symbol, Timeframe, and **Historical Period** (`Last 1 Day`, `Last 3 Days`, `Last 1 Week`, `Last 2 Weeks`, `Last 1 Month`, `Last 3 Months`, `Last 6 Months`, `Year 2025`, `Year 2024`, `Year 2023`, `Custom Date Range` with start and end date entry fields).
+  - **Strategy Selector**:
+    - **Tick Momentum Scalper** (Sub-second high-frequency tick burst momentum scalper on raw millisecond broker ticks).
+    - **CRT Range + CISD/FVG (A++ Institutional)** (Multi-timeframe market structure narrative, candle range sweeps, CISD displacement, and FVG imbalance).
+    - **HTF Bias + Fib 0.77-0.78 OTE** (Higher timeframe market structure + 15M OTE retracement).
+    - **Classic Technicals**: EMA Crossover, RSI Reversion, MACD Momentum, Bollinger Breakout.
+  - **Tick Momentum Scalper Architecture**:
+    - **Raw Tick Ingestion**: Automatically streams and chunks real millisecond broker ticks directly from the MT5 terminal.
+    - **Burst Detection**: Evaluates rolling 10-tick windows for $\ge 70\%$ agreement and net directional displacement.
+    - **Trend Filter**: 1-minute 50 EMA (buys only above, sells only below).
+    - **Scaling In**: Concurrently holds up to 20 positions with 500ms cooldown.
+    - **Micro Dollar Exits**: Fixed dollar take profit ($1-$2), hard stop loss ($2-$3), and stall decay exit (30-60 seconds).
+    - **Circuit Breakers**: Basket stop loss ($15.00 limit) closes all positions and pauses; 5 consecutive loss cooldown; daily loss cap; session filter (London Open & London/NY overlap 07:00-17:00 UTC); rollover avoidance (21:00-23:00 UTC).
   - **Capital Allocation (Single User Parameter)**: Editable `Initial Trading Capital ($)` entry with one-click quick preset buttons (`$1k`, `$5k`, `$10k`, `$25k`, `$50k`).
   - **Autonomous Reasoning Execution Model**:
     - **Position Sizing**: Autonomous Risk-Parity (risks exactly 1.0% of equity per trade).

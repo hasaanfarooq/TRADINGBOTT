@@ -241,3 +241,59 @@ class MT5Connector:
             msg = f"Fetched {total_bars:,} real bars for {symbol} ({elapsed} ms)"
             return df, msg
 
+    def fetch_ticks_range(
+        self,
+        symbol: str,
+        date_from: Any,
+        date_to: Any
+    ) -> Tuple[Optional[Any], str]:
+        """
+        Fetch real historical millisecond ticks directly from MT5 broker terminal for the given period.
+        Automatically chunks requests into 1-day windows to reliably bypass MT5 single-call buffer limits.
+        Returns: (pandas.DataFrame or None, status_message: str)
+        """
+        import pandas as pd
+        from datetime import timedelta
+
+        with self._lock:
+            if not self.is_connected and not mt5.terminal_info():
+                return None, "Error: MT5 terminal is not connected."
+
+            mt5.symbol_select(symbol, True)
+            t0 = time.perf_counter()
+
+            total_duration = date_to - date_from
+            if total_duration <= timedelta(days=1):
+                ticks = mt5.copy_ticks_range(symbol, date_from, date_to, mt5.COPY_TICKS_ALL)
+                if ticks is not None and len(ticks) > 0:
+                    df = pd.DataFrame(ticks)
+                    df["time_dt"] = pd.to_datetime(df["time_msc"], unit="ms")
+                    elapsed = round((time.perf_counter() - t0) * 1000, 1)
+                    return df, f"Fetched {len(df):,} real ticks for {symbol} ({elapsed} ms)"
+
+            # Multi-day chunking
+            curr_start = date_from
+            step = timedelta(days=1)
+            chunk_frames = []
+
+            while curr_start < date_to:
+                curr_end = min(curr_start + step, date_to)
+                ticks = mt5.copy_ticks_range(symbol, curr_start, curr_end, mt5.COPY_TICKS_ALL)
+                if ticks is not None and len(ticks) > 0:
+                    chunk_frames.append(pd.DataFrame(ticks))
+                curr_start = curr_end
+
+            elapsed = round((time.perf_counter() - t0) * 1000, 1)
+
+            if not chunk_frames:
+                err_code, err_desc = mt5.last_error()
+                return None, f"No tick data returned for {symbol}. MT5 Error: [{err_code}] {err_desc}"
+
+            df = pd.concat(chunk_frames, ignore_index=True)
+            df = df.drop_duplicates(subset=["time_msc"])
+            df["time_dt"] = pd.to_datetime(df["time_msc"], unit="ms")
+            total_ticks = len(df)
+            msg = f"Fetched {total_ticks:,} real ticks for {symbol} ({elapsed} ms)"
+            return df, msg
+
+
