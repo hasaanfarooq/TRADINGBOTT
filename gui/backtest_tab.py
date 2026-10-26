@@ -50,30 +50,92 @@ class BacktestingTab(tk.Frame):
         card = tk.Frame(parent, bg="#FFFFFF", highlightbackground="#E5E7EB", highlightthickness=1)
         card.pack(fill="both", expand=True)
 
-        # Card Header
+        # 1. Card Header (Pinned to Top)
         ch = tk.Frame(card, bg="#F9FAFB", padx=16, pady=10, highlightbackground="#E5E7EB", highlightthickness=1)
-        ch.pack(fill="x")
+        ch.pack(side="top", fill="x")
         tk.Label(ch, text="BACKTEST SETUP & PARAMETERS", font=(FONT_FAMILY, 9, "bold"), fg="#111827", bg="#F9FAFB").pack(side="left")
 
-        # Scrollable or compact body
-        body = tk.Frame(card, bg="#FFFFFF", padx=16, pady=12)
-        body.pack(fill="both", expand=True)
+        # 2. Pinned Action Buttons Footer (ALWAYS 100% VISIBLE AT BOTTOM)
+        f_actions = tk.Frame(card, bg="#FFFFFF", padx=14, pady=10, highlightbackground="#E5E7EB", highlightthickness=1)
+        f_actions.pack(side="bottom", fill="x")
+
+        self.btn_run = tk.Button(
+            f_actions,
+            text="RUN QUANTITATIVE BACKTEST",
+            font=(FONT_FAMILY, 10, "bold"),
+            bg="#2563EB",
+            fg="#FFFFFF",
+            activebackground="#1D4ED8",
+            activeforeground="#FFFFFF",
+            relief="flat",
+            bd=0,
+            cursor="hand2",
+            pady=9,
+            command=self._on_click_run
+        )
+        self.btn_run.pack(fill="x", pady=(0, 4))
+
+        self.btn_export = tk.Button(
+            f_actions,
+            text="Export Trade Ledger (CSV)",
+            font=(FONT_FAMILY, 8),
+            bg="#F3F4F6",
+            fg="#111827",
+            activebackground="#E5E7EB",
+            relief="solid",
+            bd=1,
+            cursor="hand2",
+            pady=5,
+            state="disabled",
+            command=self._on_click_export
+        )
+        self.btn_export.pack(fill="x")
+
+        # 3. Middle Scrollable Parameters Body
+        canvas_frame = tk.Frame(card, bg="#FFFFFF")
+        canvas_frame.pack(side="top", fill="both", expand=True)
+
+        canvas = tk.Canvas(canvas_frame, bg="#FFFFFF", highlightthickness=0)
+        scrollbar = ttk.Scrollbar(canvas_frame, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        body = tk.Frame(canvas, bg="#FFFFFF", padx=14, pady=8)
+        body_id = canvas.create_window((0, 0), window=body, anchor="nw")
+
+        def _on_body_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _on_canvas_configure(event):
+            canvas.itemconfig(body_id, width=event.width)
+
+        body.bind("<Configure>", _on_body_configure)
+        canvas.bind("<Configure>", _on_canvas_configure)
+
+        def _on_mousewheel(event):
+            if canvas.winfo_exists() and canvas.winfo_ismapped():
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
 
         # Market Data Source
         tk.Label(body, text="MARKET SPECIFICATIONS", font=(FONT_FAMILY, 8, "bold"), fg="#2563EB", bg="#FFFFFF").pack(anchor="w", pady=(0, 4))
         
         row1 = tk.Frame(body, bg="#FFFFFF")
-        row1.pack(fill="x", pady=(0, 8))
+        row1.pack(fill="x", pady=(0, 6))
 
         f_sym = tk.Frame(row1, bg="#FFFFFF")
-        f_sym.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        f_sym.pack(side="left", fill="x", expand=True, padx=(0, 4))
         tk.Label(f_sym, text="Symbol", font=(FONT_FAMILY, 8), fg="#6B7280", bg="#FFFFFF").pack(anchor="w")
         self.combo_symbol = ttk.Combobox(f_sym, values=["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "XAUUSD", "BTCUSD"], font=(FONT_FAMILY, 9))
         self.combo_symbol.set("EURUSD")
         self.combo_symbol.pack(fill="x", pady=(2, 0))
 
         f_tf = tk.Frame(row1, bg="#FFFFFF")
-        f_tf.pack(side="right", fill="x", expand=True, padx=(6, 0))
+        f_tf.pack(side="right", fill="x", expand=True, padx=(4, 0))
         tk.Label(f_tf, text="Timeframe", font=(FONT_FAMILY, 8), fg="#6B7280", bg="#FFFFFF").pack(anchor="w")
         self.combo_tf = ttk.Combobox(f_tf, values=list(TIMEFRAME_MAP.keys()), font=(FONT_FAMILY, 9), state="readonly")
         self.combo_tf.set("H1 (1 Hour)")
@@ -83,7 +145,7 @@ class BacktestingTab(tk.Frame):
         tk.Label(body, text="Historical Period (Real Year)", font=(FONT_FAMILY, 8), fg="#6B7280", bg="#FFFFFF").pack(anchor="w")
         self.combo_year = ttk.Combobox(body, values=YEAR_OPTIONS, font=(FONT_FAMILY, 9), state="readonly")
         self.combo_year.set("2024")
-        self.combo_year.pack(fill="x", pady=(2, 12))
+        self.combo_year.pack(fill="x", pady=(2, 8))
 
         # Strategy Selection
         tk.Label(body, text="ALGORITHMIC STRATEGY (RULE-BASED)", font=(FONT_FAMILY, 8, "bold"), fg="#2563EB", bg="#FFFFFF").pack(anchor="w", pady=(0, 4))
@@ -101,27 +163,26 @@ class BacktestingTab(tk.Frame):
         )
         self.combo_strategy.set("HTF Bias + Fib 0.77-0.78 OTE")
         self.combo_strategy.bind("<<ComboboxSelected>>", self._on_strategy_change)
-        self.combo_strategy.pack(fill="x", pady=(2, 10))
+        self.combo_strategy.pack(fill="x", pady=(2, 8))
 
         # Dynamic Strategy Params Frame
-        self.f_strat_params = tk.Frame(body, bg="#F9FAFB", highlightbackground="#E5E7EB", highlightthickness=1, padx=10, pady=8)
-        self.f_strat_params.pack(fill="x", pady=(0, 12))
+        self.f_strat_params = tk.Frame(body, bg="#F9FAFB", highlightbackground="#E5E7EB", highlightthickness=1, padx=8, pady=6)
+        self.f_strat_params.pack(fill="x", pady=(0, 8))
         self._render_strategy_params("HTF Bias + Fib 0.77-0.78 OTE")
 
-        # Capital & Risk Controls
         # Capital Specification (The ONLY user-controlled parameter)
         tk.Label(body, text="CAPITAL ALLOCATION (USER INPUT)", font=(FONT_FAMILY, 8, "bold"), fg="#2563EB", bg="#FFFFFF").pack(anchor="w", pady=(0, 4))
 
         f_cap = tk.Frame(body, bg="#FFFFFF")
-        f_cap.pack(fill="x", pady=(0, 4))
+        f_cap.pack(fill="x", pady=(0, 3))
         tk.Label(f_cap, text="Initial Trading Capital ($)", font=(FONT_FAMILY, 8), fg="#6B7280", bg="#FFFFFF").pack(anchor="w")
         self.entry_capital = ttk.Entry(f_cap, font=(FONT_FAMILY, 10, "bold"))
         self.entry_capital.insert(0, "10000")
-        self.entry_capital.pack(fill="x", pady=(2, 4))
+        self.entry_capital.pack(fill="x", pady=(2, 3))
 
         # Quick Capital Preset Buttons ($1k, $5k, $10k, $25k, $50k)
         f_pills = tk.Frame(body, bg="#FFFFFF")
-        f_pills.pack(fill="x", pady=(0, 10))
+        f_pills.pack(fill="x", pady=(0, 8))
         presets = ["1,000", "5,000", "10,000", "25,000", "50,000"]
         for p in presets:
             btn_p = tk.Button(
@@ -141,11 +202,11 @@ class BacktestingTab(tk.Frame):
             btn_p.pack(side="left", expand=True, fill="x", padx=1)
 
         # Autonomous Reasoning Model Specifications Card
-        f_ai_specs = tk.Frame(body, bg="#F8FAFC", highlightbackground="#E2E8F0", highlightthickness=1, padx=8, pady=8)
-        f_ai_specs.pack(fill="x", pady=(0, 12))
+        f_ai_specs = tk.Frame(body, bg="#F8FAFC", highlightbackground="#E2E8F0", highlightthickness=1, padx=8, pady=6)
+        f_ai_specs.pack(fill="x", pady=(0, 4))
 
         h_ai = tk.Frame(f_ai_specs, bg="#F8FAFC")
-        h_ai.pack(fill="x", pady=(0, 4))
+        h_ai.pack(fill="x", pady=(0, 3))
         tk.Label(h_ai, text="[ REASONING MODEL AUTONOMOUS SETUP ]", font=(FONT_FAMILY, 7, "bold"), fg="#059669", bg="#F8FAFC").pack(side="left")
 
         specs = [
@@ -160,39 +221,6 @@ class BacktestingTab(tk.Frame):
             row_s.pack(fill="x", pady=1)
             tk.Label(row_s, text=label, font=(FONT_FAMILY, 7, "bold"), fg="#475569", bg="#F8FAFC", width=12, anchor="w").pack(side="left")
             tk.Label(row_s, text=val, font=(FONT_FAMILY, 7), fg="#0F172A", bg="#F8FAFC", anchor="w").pack(side="left", fill="x", expand=True)
-
-        # Action Buttons
-        self.btn_run = tk.Button(
-            body,
-            text="RUN QUANTITATIVE BACKTEST",
-            font=(FONT_FAMILY, 10, "bold"),
-            bg="#2563EB",
-            fg="#FFFFFF",
-            activebackground="#1D4ED8",
-            activeforeground="#FFFFFF",
-            relief="flat",
-            bd=0,
-            cursor="hand2",
-            pady=10,
-            command=self._on_click_run
-        )
-        self.btn_run.pack(fill="x", pady=(4, 6))
-
-        self.btn_export = tk.Button(
-            body,
-            text="Export Trade Ledger (CSV)",
-            font=(FONT_FAMILY, 8),
-            bg="#F3F4F6",
-            fg="#111827",
-            activebackground="#E5E7EB",
-            relief="solid",
-            bd=1,
-            cursor="hand2",
-            pady=6,
-            state="disabled",
-            command=self._on_click_export
-        )
-        self.btn_export.pack(fill="x")
 
     def _on_strategy_change(self, event=None):
         self._render_strategy_params(self.combo_strategy.get())

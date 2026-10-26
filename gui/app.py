@@ -98,8 +98,8 @@ class MT5TradingStationGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("MT5 Algorithmic Trading Station")
-        self.root.geometry("1120x760")
-        self.root.minsize(980, 680)
+        self.root.geometry("1200x820")
+        self.root.minsize(1020, 680)
         self.root.configure(bg=C_BG_APP)
 
         # Connection manager
