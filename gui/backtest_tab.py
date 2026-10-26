@@ -8,11 +8,23 @@ import threading
 from datetime import datetime, timezone
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
+from typing import List, Dict, Any, Optional
 import pandas as pd
 import MetaTrader5 as mt5
 
 from core.backtester import Backtester
 from gui.data_tab import TIMEFRAME_MAP, YEAR_OPTIONS
+
+TF_MINUTES = {
+    mt5.TIMEFRAME_M1: 1,
+    mt5.TIMEFRAME_M5: 5,
+    mt5.TIMEFRAME_M15: 15,
+    mt5.TIMEFRAME_M30: 30,
+    mt5.TIMEFRAME_H1: 60,
+    mt5.TIMEFRAME_H4: 240,
+    mt5.TIMEFRAME_D1: 1440,
+    mt5.TIMEFRAME_W1: 10080
+}
 
 FONT_FAMILY = "Segoe UI" if sys.platform == "win32" else "Helvetica"
 
@@ -138,7 +150,8 @@ class BacktestingTab(tk.Frame):
         f_tf.pack(side="right", fill="x", expand=True, padx=(4, 0))
         tk.Label(f_tf, text="Timeframe", font=(FONT_FAMILY, 8), fg="#6B7280", bg="#FFFFFF").pack(anchor="w")
         self.combo_tf = ttk.Combobox(f_tf, values=list(TIMEFRAME_MAP.keys()), font=(FONT_FAMILY, 9), state="readonly")
-        self.combo_tf.set("H1 (1 Hour)")
+        self.combo_tf.set("M15 (15 Minutes)")
+        self.combo_tf.bind("<<ComboboxSelected>>", self._on_timeframe_change)
         self.combo_tf.pack(fill="x", pady=(2, 0))
 
         # Target Year
@@ -223,6 +236,41 @@ class BacktestingTab(tk.Frame):
             tk.Label(row_s, text=label, font=(FONT_FAMILY, 7, "bold"), fg="#475569", bg="#F8FAFC", width=12, anchor="w").pack(side="left")
             tk.Label(row_s, text=val, font=(FONT_FAMILY, 7), fg="#0F172A", bg="#F8FAFC", anchor="w").pack(side="left", fill="x", expand=True)
 
+    def _get_valid_htf_options(self) -> List[str]:
+        """Returns timeframes strictly higher than the currently selected execution timeframe."""
+        exec_name = self.combo_tf.get() if hasattr(self, "combo_tf") else "M15 (15 Minutes)"
+        exec_tf = TIMEFRAME_MAP.get(exec_name, mt5.TIMEFRAME_M15)
+        exec_mins = TF_MINUTES.get(exec_tf, 15)
+        options = [
+            name for name, tf_val in TIMEFRAME_MAP.items()
+            if TF_MINUTES.get(tf_val, 0) > exec_mins and TF_MINUTES.get(tf_val, 0) <= 1440
+        ]
+        if not options:
+            options = ["D1 (Daily)"]
+        return options
+
+    def _on_timeframe_change(self, event=None):
+        """Called when user changes execution timeframe in combo_tf."""
+        exec_name = self.combo_tf.get()
+        if hasattr(self, "lbl_exec_tf") and self.lbl_exec_tf.winfo_exists():
+            self.lbl_exec_tf.config(text=f"Execution TF: {exec_name.split()[0]}")
+
+        valid_options = self._get_valid_htf_options()
+
+        for widget_name in ("param_crt_htf", "param_fib_htf"):
+            if hasattr(self, widget_name):
+                w = getattr(self, widget_name)
+                if w.winfo_exists():
+                    curr = w.get()
+                    w["values"] = valid_options
+                    if curr not in valid_options:
+                        if "H1 (1 Hour)" in valid_options:
+                            w.set("H1 (1 Hour)")
+                        elif "H4 (4 Hours)" in valid_options:
+                            w.set("H4 (4 Hours)")
+                        else:
+                            w.set(valid_options[0])
+
     def _on_strategy_change(self, event=None):
         self._render_strategy_params(self.combo_strategy.get())
 
@@ -231,16 +279,21 @@ class BacktestingTab(tk.Frame):
             child.destroy()
 
         if strategy == "CRT Range + CISD/FVG (A++ Institutional)":
+            valid_htf = self._get_valid_htf_options()
+            default_htf = "H1 (1 Hour)" if "H1 (1 Hour)" in valid_htf else ("H4 (4 Hours)" if "H4 (4 Hours)" in valid_htf else valid_htf[0])
+
             row1 = tk.Frame(self.f_strat_params, bg="#F9FAFB")
             row1.pack(fill="x", pady=(0, 4))
             tk.Label(row1, text="CRT Anchor Timeframe", font=(FONT_FAMILY, 8, "bold"), fg="#111827", bg="#F9FAFB").pack(side="left")
-            self.param_crt_htf = ttk.Combobox(row1, values=["H1 (1 Hour)", "H4 (4 Hours)"], width=13, font=(FONT_FAMILY, 8), state="readonly")
-            self.param_crt_htf.set("H1 (1 Hour)")
+            self.param_crt_htf = ttk.Combobox(row1, values=valid_htf, width=13, font=(FONT_FAMILY, 8), state="readonly")
+            self.param_crt_htf.set(default_htf)
             self.param_crt_htf.pack(side="right")
 
             row2 = tk.Frame(self.f_strat_params, bg="#F9FAFB")
             row2.pack(fill="x", pady=(0, 2))
-            tk.Label(row2, text="Execution TF: M15 (15 Min)", font=(FONT_FAMILY, 8), fg="#4B5563", bg="#F9FAFB").pack(side="left")
+            exec_name = self.combo_tf.get().split()[0] if hasattr(self, "combo_tf") else "M15"
+            self.lbl_exec_tf = tk.Label(row2, text=f"Execution TF: {exec_name}", font=(FONT_FAMILY, 8), fg="#4B5563", bg="#F9FAFB")
+            self.lbl_exec_tf.pack(side="left")
             tk.Label(row2, text="Model: CISD + FVG/IFVG", font=(FONT_FAMILY, 8, "bold"), fg="#2563EB", bg="#F9FAFB").pack(side="right")
 
             row3 = tk.Frame(self.f_strat_params, bg="#F9FAFB")
@@ -277,17 +330,22 @@ class BacktestingTab(tk.Frame):
             tk.Label(row_score, text="/ 100 pts", font=(FONT_FAMILY, 8), fg="#6B7280", bg="#F9FAFB").pack(side="left")
 
         elif strategy == "HTF Bias + Fib 0.77-0.78 OTE":
+            valid_htf = self._get_valid_htf_options()
+            default_htf = "H1 (1 Hour)" if "H1 (1 Hour)" in valid_htf else ("H4 (4 Hours)" if "H4 (4 Hours)" in valid_htf else valid_htf[0])
+
             row1 = tk.Frame(self.f_strat_params, bg="#F9FAFB")
             row1.pack(fill="x", pady=(0, 4))
 
             tk.Label(row1, text="Higher Timeframe Bias", font=(FONT_FAMILY, 8, "bold"), fg="#111827", bg="#F9FAFB").pack(side="left")
-            self.param_fib_htf = ttk.Combobox(row1, values=["H1 (1 Hour)", "H4 (4 Hours)"], width=13, font=(FONT_FAMILY, 8), state="readonly")
-            self.param_fib_htf.set("H1 (1 Hour)")
+            self.param_fib_htf = ttk.Combobox(row1, values=valid_htf, width=13, font=(FONT_FAMILY, 8), state="readonly")
+            self.param_fib_htf.set(default_htf)
             self.param_fib_htf.pack(side="right")
 
             row2 = tk.Frame(self.f_strat_params, bg="#F9FAFB")
             row2.pack(fill="x", pady=(0, 2))
-            tk.Label(row2, text="Execution TF: M15 (15 Min)", font=(FONT_FAMILY, 8), fg="#4B5563", bg="#F9FAFB").pack(side="left")
+            exec_name = self.combo_tf.get().split()[0] if hasattr(self, "combo_tf") else "M15"
+            self.lbl_exec_tf = tk.Label(row2, text=f"Execution TF: {exec_name}", font=(FONT_FAMILY, 8), fg="#4B5563", bg="#F9FAFB")
+            self.lbl_exec_tf.pack(side="left")
             tk.Label(row2, text="Zone: 0.77-0.78 Fib", font=(FONT_FAMILY, 8, "bold"), fg="#2563EB", bg="#F9FAFB").pack(side="right")
 
             row3 = tk.Frame(self.f_strat_params, bg="#F9FAFB")
@@ -535,22 +593,43 @@ class BacktestingTab(tk.Frame):
         if strategy_name == "CRT Range + CISD/FVG (A++ Institutional)":
             htf_choice = getattr(self, "param_crt_htf", ttk.Combobox()).get() or "H1 (1 Hour)"
             htf_tf = TIMEFRAME_MAP.get(htf_choice, mt5.TIMEFRAME_H1)
+
+            # Ensure Anchor Timeframe is strictly higher than Execution Timeframe
+            exec_mins = TF_MINUTES.get(tf, 15)
+            anchor_mins = TF_MINUTES.get(htf_tf, 60)
+            if anchor_mins <= exec_mins:
+                valid_options = self._get_valid_htf_options()
+                htf_choice = valid_options[0]
+                htf_tf = TIMEFRAME_MAP.get(htf_choice, mt5.TIMEFRAME_H4)
+                if hasattr(self, "param_crt_htf"):
+                    self.param_crt_htf.set(htf_choice)
+                self.log_callback(f"[CRT Setup] Anchor TF must be higher than Execution ({tf_name}). Auto-promoted Anchor to {htf_choice}.", "WARNING")
+
             params["htf_name"] = htf_choice
             params["buffer_pips"] = 2.0
             params["use_reasoning"] = getattr(self, "var_use_reasoning", tk.BooleanVar(value=True)).get()
             params["min_confluence_score"] = int(getattr(self, "combo_min_score", ttk.Combobox()).get() or "65")
-            tf = mt5.TIMEFRAME_M15
+
         elif strategy_name == "HTF Bias + Fib 0.77-0.78 OTE":
             htf_choice = self.param_fib_htf.get()
             htf_tf = TIMEFRAME_MAP.get(htf_choice, mt5.TIMEFRAME_H1)
+
+            exec_mins = TF_MINUTES.get(tf, 15)
+            anchor_mins = TF_MINUTES.get(htf_tf, 60)
+            if anchor_mins <= exec_mins:
+                valid_options = self._get_valid_htf_options()
+                htf_choice = valid_options[0]
+                htf_tf = TIMEFRAME_MAP.get(htf_choice, mt5.TIMEFRAME_H4)
+                if hasattr(self, "param_fib_htf"):
+                    self.param_fib_htf.set(htf_choice)
+                self.log_callback(f"[Fib Setup] HTF Bias must be higher than Execution ({tf_name}). Auto-promoted HTF to {htf_choice}.", "WARNING")
+
             params["htf_name"] = htf_choice
             params["swing_len_htf"] = 3
             params["swing_len_m15"] = 3
             params["buffer_pips"] = 2.0
             params["use_reasoning"] = getattr(self, "var_use_reasoning", tk.BooleanVar(value=True)).get()
             params["min_confluence_score"] = int(getattr(self, "combo_min_score", ttk.Combobox()).get() or "65")
-            # For this strategy, execution is strictly on M15
-            tf = mt5.TIMEFRAME_M15
         elif strategy_name == "EMA Crossover":
             params["fast_ema"] = self.param_fast_ema.get()
             params["slow_ema"] = self.param_slow_ema.get()
