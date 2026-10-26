@@ -38,6 +38,13 @@ A high-performance, institutional-grade desktop trading workstation for **MetaTr
     3. Liquidity Sweep Detection (Turtle Soup high/low grabs before reversals).
     4. Volatility & ATR Regime (avoids low-liquidity holiday chop and freak news spikes).
   - Filters out low-conviction setups to protect capital, tracking filtered setups on the dashboard.
+- **Autonomous Capital & Execution Controls**:
+  - **Single User Input**: The trader only specifies their `Initial Trading Capital ($)` (with 1-click presets: `$1k`, `$5k`, `$10k`, `$25k`, `$50k`).
+  - **Autonomous Quantitative Risk Sizing**: Dynamically calculates position lot size per trade based on account balance and structural stop distance ($\text{Lot} = \frac{\text{Equity} \times 0.01}{\text{Risk Distance} \times \text{Contract Size}}$) so every trade risks strictly 1.0% of balance.
+  - **Dynamic Structural Stop Loss**: Placed outside swing anchor points with ATR noise shielding.
+  - **Strict 1:2 R:R Target**: Automatically calibrated for +2.0% profit target per winning trade.
+  - **Auto Break-Even Trailing**: Automatically moves Stop Loss to entry (+0.0%) when price reaches +1.0R in profit, eliminating downside risk.
+  - **Live Broker Spread Detection**: Auto-detects real broker spread in points from the active MT5 terminal connection.
 - **Performance Scorecard**:
   - Net Profit ($) and Return on Investment (ROI %).
   - Win Rate % (Winning vs. Losing Trades count).

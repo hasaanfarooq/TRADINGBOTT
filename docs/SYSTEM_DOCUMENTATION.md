@@ -231,9 +231,15 @@ The GUI uses a custom light theme built on the `clam` ttk engine:
 #### Tab 3: Quantitative Backtester
 - **Controls**:
   - Target Symbol, Timeframe, and Year.
-  - Strategy selector (EMA Crossover, RSI Reversion, MACD Momentum, Bollinger Breakout).
-  - Dynamic parameter inputs matching the chosen strategy.
-  - Capital controls: Initial Capital ($), Lot Size, Stop Loss (pips), Take Profit (pips), Spread (pips).
+  - Strategy selector (HTF Bias + Fib 0.77-0.78 OTE, EMA Crossover, RSI Reversion, MACD Momentum, Bollinger Breakout).
+  - Dynamic parameter inputs with Quantitative Confluence Scoring threshold.
+  - **Capital Allocation (Single User Parameter)**: Editable `Initial Trading Capital ($)` entry with one-click quick preset buttons (`$1k`, `$5k`, `$10k`, `$25k`, `$50k`).
+  - **Autonomous Reasoning Execution Model**:
+    - **Position Sizing**: Autonomous Risk-Parity (risks exactly 1.0% of equity per trade).
+    - **Stop Loss**: Dynamic structural swing anchor + ATR volatility shield.
+    - **Take Profit**: Strict 1:2 Risk-to-Reward ratio target (+2.0% profit).
+    - **Capital Preservation**: Automatic Break-Even trailing when price reaches +1.0R in profit.
+    - **Broker Spread**: Auto-detected live from MetaTrader 5 broker terminal specs.
   - "RUN QUANTITATIVE BACKTEST" button.
   - "Export Trade Ledger (CSV)" button.
 - **Performance Scorecard**:

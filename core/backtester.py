@@ -66,6 +66,13 @@ class StrategyEngine:
             else:
                 df["htf_bias"] = 1
 
+            # ATR14 for dynamic volatility protection
+            hl = df["high"] - df["low"]
+            hc = (df["high"] - df["close"].shift(1)).abs()
+            lc = (df["low"] - df["close"].shift(1)).abs()
+            tr_series = pd.concat([hl, hc, lc], axis=1).max(axis=1)
+            atr14_series = tr_series.rolling(window=14).mean().bfill()
+
             # M15 Break of Structure and Fib 0.77 - 0.78 Retracement
             n = len(df)
             signals = [0] * n
@@ -82,6 +89,7 @@ class StrategyEngine:
                 l = df["low"].iloc[i]
                 o = df["open"].iloc[i]
                 htf_bias = df["htf_bias"].iloc[i]
+                curr_atr = float(atr14_series.iloc[i]) if i < len(atr14_series) else 15.0 * pip_size
 
                 # Identify confirmed M15 swing points
                 if i >= swing_len_m15:
@@ -118,10 +126,11 @@ class StrategyEngine:
 
                         # Closes back out of the zone in the direction of the bias
                         if active_setup["tested"] and c > fib_77 and c > o:
+                            raw_risk = c - L + buffer_dist
+                            safe_risk = max(raw_risk, 1.2 * curr_atr, 12.0 * pip_size)
                             signals[i] = 1
-                            dyn_sl[i] = round(L - buffer_dist, 5)
-                            risk = c - dyn_sl[i]
-                            dyn_tp[i] = round(c + (2.0 * risk), 5) if risk > 0 else round(H, 5)
+                            dyn_sl[i] = round(c - safe_risk, 5)
+                            dyn_tp[i] = round(c + (2.0 * safe_risk), 5)  # Exact 1:2 R:R
                             active_setup = None
                         elif l < L:
                             active_setup = None
@@ -140,10 +149,11 @@ class StrategyEngine:
 
                         # Closes back out of the zone in the direction of the bias
                         if active_setup["tested"] and c < fib_77 and c < o:
+                            raw_risk = H - c + buffer_dist
+                            safe_risk = max(raw_risk, 1.2 * curr_atr, 12.0 * pip_size)
                             signals[i] = -1
-                            dyn_sl[i] = round(H + buffer_dist, 5)
-                            risk = dyn_sl[i] - c
-                            dyn_tp[i] = round(c - (2.0 * risk), 5) if risk > 0 else round(L, 5)
+                            dyn_sl[i] = round(c + safe_risk, 5)
+                            dyn_tp[i] = round(c - (2.0 * safe_risk), 5)  # Exact 1:2 R:R
                             active_setup = None
                         elif h > H:
                             active_setup = None
@@ -222,12 +232,13 @@ class Backtester:
         strategy_name: str,
         params: Dict[str, Any],
         initial_capital: float = 10000.0,
-        lot_size: float = 0.1,
+        lot_size: Optional[float] = None,
         stop_loss_pips: float = 0.0,
         take_profit_pips: float = 0.0,
         spread_pips: float = 1.5,
         pip_size: float = 0.0001,
-        contract_size: float = 100000.0
+        contract_size: float = 100000.0,
+        risk_per_trade_pct: float = 0.01
     ):
         self.raw_data = data
         self.strategy_name = strategy_name
@@ -239,6 +250,7 @@ class Backtester:
         self.spread_pips = spread_pips
         self.pip_size = pip_size
         self.contract_size = contract_size
+        self.risk_per_trade_pct = risk_per_trade_pct
 
     def run(self) -> Dict[str, Any]:
         """Execute simulation across all bars."""
@@ -293,14 +305,27 @@ class Backtester:
                 pos_lot = open_pos["lot_size"]
                 custom_sl = open_pos.get("sl_price", 0.0)
                 custom_tp = open_pos.get("tp_price", 0.0)
+                risk_dist = open_pos.get("risk_dist", 0.0)
+                be_active = open_pos.get("be_active", False)
                 exit_price = None
                 exit_reason = None
+
+                # Autonomous Capital Protection: Break-Even Trailing at +1R profit
+                if not be_active and risk_dist > 0:
+                    if p_type == "BUY" and high_price >= (entry_price + risk_dist):
+                        open_pos["sl_price"] = entry_price + spread_cost
+                        custom_sl = open_pos["sl_price"]
+                        open_pos["be_active"] = True
+                    elif p_type == "SELL" and low_price <= (entry_price - risk_dist):
+                        open_pos["sl_price"] = entry_price - spread_cost
+                        custom_sl = open_pos["sl_price"]
+                        open_pos["be_active"] = True
 
                 if p_type == "BUY":
                     # Check Dynamic Structural SL or Fixed SL
                     if custom_sl > 0 and low_price <= custom_sl:
                         exit_price = custom_sl
-                        exit_reason = "Stop Loss (Structural)"
+                        exit_reason = "Break-Even (+1R Trailed)" if open_pos.get("be_active") else "Stop Loss (Structural)"
                     elif fixed_sl_dist > 0 and low_price <= (entry_price - fixed_sl_dist):
                         exit_price = entry_price - fixed_sl_dist
                         exit_reason = "Stop Loss"
@@ -320,7 +345,7 @@ class Backtester:
                     # Check Dynamic Structural SL or Fixed SL
                     if custom_sl > 0 and high_price >= custom_sl:
                         exit_price = custom_sl
-                        exit_reason = "Stop Loss (Structural)"
+                        exit_reason = "Break-Even (+1R Trailed)" if open_pos.get("be_active") else "Stop Loss (Structural)"
                     elif fixed_sl_dist > 0 and high_price >= (entry_price + fixed_sl_dist):
                         exit_price = entry_price + fixed_sl_dist
                         exit_reason = "Stop Loss"
@@ -410,32 +435,56 @@ class Backtester:
 
                     # Execute Approved Trade
                     if sig == 1:  # BUY
-                        if dyn_sl_val > 0:
-                            risk = open_price - dyn_sl_val
-                            if risk > 0:
-                                dyn_tp_val = round(open_price + (2.0 * risk), 5)
+                        risk = (open_price - dyn_sl_val) if dyn_sl_val > 0 else (fixed_sl_dist if fixed_sl_dist > 0 else 20.0 * self.pip_size)
+                        if risk > 0 and dyn_sl_val > 0:
+                            dyn_tp_val = round(open_price + (2.0 * risk), 5)
+
+                        if self.lot_size is None or self.lot_size <= 0:
+                            trade_lot = TradeReasoningEngine.calculate_position_size(
+                                balance=balance,
+                                risk_pct=self.risk_per_trade_pct,
+                                sl_distance_price=risk,
+                                contract_size=self.contract_size
+                            )
+                        else:
+                            trade_lot = self.lot_size
+
                         open_pos = {
                             "type": "BUY",
-                            "lot_size": self.lot_size,
+                            "lot_size": trade_lot,
                             "entry_time": bar_time,
                             "entry_price": open_price,
                             "sl_price": dyn_sl_val,
                             "tp_price": dyn_tp_val,
+                            "risk_dist": risk,
+                            "be_active": False,
                             "score": confluence_score,
                             "thesis": trade_thesis
                         }
                     elif sig == -1:  # SELL
-                        if dyn_sl_val > 0:
-                            risk = dyn_sl_val - open_price
-                            if risk > 0:
-                                dyn_tp_val = round(open_price - (2.0 * risk), 5)
+                        risk = (dyn_sl_val - open_price) if dyn_sl_val > 0 else (fixed_sl_dist if fixed_sl_dist > 0 else 20.0 * self.pip_size)
+                        if risk > 0 and dyn_sl_val > 0:
+                            dyn_tp_val = round(open_price - (2.0 * risk), 5)
+
+                        if self.lot_size is None or self.lot_size <= 0:
+                            trade_lot = TradeReasoningEngine.calculate_position_size(
+                                balance=balance,
+                                risk_pct=self.risk_per_trade_pct,
+                                sl_distance_price=risk,
+                                contract_size=self.contract_size
+                            )
+                        else:
+                            trade_lot = self.lot_size
+
                         open_pos = {
                             "type": "SELL",
-                            "lot_size": self.lot_size,
+                            "lot_size": trade_lot,
                             "entry_time": bar_time,
                             "entry_price": open_price,
                             "sl_price": dyn_sl_val,
                             "tp_price": dyn_tp_val,
+                            "risk_dist": risk,
+                            "be_active": False,
                             "score": confluence_score,
                             "thesis": trade_thesis
                         }

@@ -37,33 +37,61 @@ class TradeReasoningEngine:
         tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
         m15["atr14"] = tr.rolling(window=14).mean().bfill()
         m15["atr_ma50"] = m15["atr14"].rolling(window=50).mean().bfill()
-        result["m15"] = m15
 
         # 2. H1: Trend & Momentum EMA
         if df_h1 is not None and len(df_h1) > 20:
             h1 = df_h1.copy()
             h1["ema20"] = h1["close"].ewm(span=20, adjust=False).mean()
             h1["ema50"] = h1["close"].ewm(span=50, adjust=False).mean()
+            h1["h1_bull"] = h1["close"] > h1["ema20"]
             result["h1"] = h1
+
+            # Vectorized backward merge to M15 for instant O(1) bar lookups
+            m15 = pd.merge_asof(
+                m15.sort_values("time"),
+                h1[["time", "h1_bull"]].sort_values("time"),
+                on="time",
+                direction="backward"
+            )
         else:
             result["h1"] = None
+            m15["h1_bull"] = None
 
         # 3. H4: Intermediate Structure & 50 EMA
         if df_h4 is not None and len(df_h4) > 20:
             h4 = df_h4.copy()
             h4["ema50"] = h4["close"].ewm(span=50, adjust=False).mean()
+            h4["h4_bull"] = h4["close"] > h4["ema50"]
             result["h4"] = h4
+
+            m15 = pd.merge_asof(
+                m15.sort_values("time"),
+                h4[["time", "h4_bull"]].sort_values("time"),
+                on="time",
+                direction="backward"
+            )
         else:
             result["h4"] = None
+            m15["h4_bull"] = None
 
         # 4. D1: Macro Institutional Trend
         if df_d1 is not None and len(df_d1) > 10:
             d1 = df_d1.copy()
             d1["ema50"] = d1["close"].ewm(span=50, adjust=False).mean()
+            d1["d1_bull"] = d1["close"] > d1["ema50"]
             result["d1"] = d1
+
+            m15 = pd.merge_asof(
+                m15.sort_values("time"),
+                d1[["time", "d1_bull"]].sort_values("time"),
+                on="time",
+                direction="backward"
+            )
         else:
             result["d1"] = None
+            m15["d1_bull"] = None
 
+        result["m15"] = m15
         return result
 
     def evaluate_candidate(
@@ -110,40 +138,31 @@ class TradeReasoningEngine:
         h1_bull = None
 
         # D1 Institutional Bias (10 pts)
-        if d1 is not None and len(d1) > 0:
-            d1_prior = d1[d1["time"] <= curr_time]
-            if len(d1_prior) > 0:
-                d1_row = d1_prior.iloc[-1]
-                d1_bull = d1_row["close"] > d1_row["ema50"]
-                if (direction == "BUY" and d1_bull) or (direction == "SELL" and not d1_bull):
-                    mtf_pts += 10
-                    reasons.append("[+] D1 Macro Trend Aligned (+10)")
-                else:
-                    reasons.append("[-] Opposing D1 Macro Trend (0)")
+        d1_bull = curr_bar.get("d1_bull")
+        if pd.notna(d1_bull):
+            if (direction == "BUY" and d1_bull) or (direction == "SELL" and not d1_bull):
+                mtf_pts += 10
+                reasons.append("[+] D1 Macro Trend Aligned (+10)")
+            else:
+                reasons.append("[-] Opposing D1 Macro Trend (0)")
 
         # H4 Intermediate Flow (10 pts)
-        if h4 is not None and len(h4) > 0:
-            h4_prior = h4[h4["time"] <= curr_time]
-            if len(h4_prior) > 0:
-                h4_row = h4_prior.iloc[-1]
-                h4_bull = h4_row["close"] > h4_row["ema50"]
-                if (direction == "BUY" and h4_bull) or (direction == "SELL" and not h4_bull):
-                    mtf_pts += 10
-                    reasons.append("[+] 4H Intermediate Flow Aligned (+10)")
-                else:
-                    reasons.append("[-] Opposing 4H Flow (0)")
+        h4_bull = curr_bar.get("h4_bull")
+        if pd.notna(h4_bull):
+            if (direction == "BUY" and h4_bull) or (direction == "SELL" and not h4_bull):
+                mtf_pts += 10
+                reasons.append("[+] 4H Intermediate Flow Aligned (+10)")
+            else:
+                reasons.append("[-] Opposing 4H Flow (0)")
 
         # H1 Immediate Bias (10 pts)
-        if h1 is not None and len(h1) > 0:
-            h1_prior = h1[h1["time"] <= curr_time]
-            if len(h1_prior) > 0:
-                h1_row = h1_prior.iloc[-1]
-                h1_bull = h1_row["close"] > h1_row["ema20"]
-                if (direction == "BUY" and h1_bull) or (direction == "SELL" and not h1_bull):
-                    mtf_pts += 10
-                    reasons.append("[+] 1H Momentum Aligned (+10)")
-                else:
-                    reasons.append("[-] Opposing 1H Momentum (0)")
+        h1_bull = curr_bar.get("h1_bull")
+        if pd.notna(h1_bull):
+            if (direction == "BUY" and h1_bull) or (direction == "SELL" and not h1_bull):
+                mtf_pts += 10
+                reasons.append("[+] 1H Momentum Aligned (+10)")
+            else:
+                reasons.append("[-] Opposing 1H Momentum (0)")
 
         # If higher timeframes were not available, grant default baseline
         if d1 is None and h4 is None and h1 is None:
@@ -284,3 +303,24 @@ class TradeReasoningEngine:
             "thesis": thesis,
             "scores": scores
         }
+
+    @staticmethod
+    def calculate_position_size(
+        balance: float,
+        risk_pct: float,
+        sl_distance_price: float,
+        contract_size: float = 100000.0,
+        min_lot: float = 0.01,
+        max_lot: float = 20.0
+    ) -> float:
+        """
+        Calculates exact mathematical position sizing so every trade risks
+        precisely risk_pct of equity (e.g. 1.0%), regardless of stop loss pip distance.
+        """
+        if sl_distance_price <= 0 or balance <= 0 or contract_size <= 0:
+            return min_lot
+
+        risk_dollars = balance * risk_pct
+        calculated_lots = risk_dollars / (sl_distance_price * contract_size)
+        clamped_lots = max(min_lot, min(max_lot, round(calculated_lots, 2)))
+        return clamped_lots

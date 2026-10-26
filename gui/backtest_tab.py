@@ -109,49 +109,57 @@ class BacktestingTab(tk.Frame):
         self._render_strategy_params("HTF Bias + Fib 0.77-0.78 OTE")
 
         # Capital & Risk Controls
-        tk.Label(body, text="CAPITAL & EXECUTION CONTROLS", font=(FONT_FAMILY, 8, "bold"), fg="#2563EB", bg="#FFFFFF").pack(anchor="w", pady=(0, 4))
+        # Capital Specification (The ONLY user-controlled parameter)
+        tk.Label(body, text="CAPITAL ALLOCATION (USER INPUT)", font=(FONT_FAMILY, 8, "bold"), fg="#2563EB", bg="#FFFFFF").pack(anchor="w", pady=(0, 4))
 
-        row_cap = tk.Frame(body, bg="#FFFFFF")
-        row_cap.pack(fill="x", pady=(0, 6))
-
-        f_cap = tk.Frame(row_cap, bg="#FFFFFF")
-        f_cap.pack(side="left", fill="x", expand=True, padx=(0, 6))
-        tk.Label(f_cap, text="Initial Capital ($)", font=(FONT_FAMILY, 8), fg="#6B7280", bg="#FFFFFF").pack(anchor="w")
-        self.entry_capital = ttk.Entry(f_cap, font=(FONT_FAMILY, 9))
+        f_cap = tk.Frame(body, bg="#FFFFFF")
+        f_cap.pack(fill="x", pady=(0, 4))
+        tk.Label(f_cap, text="Initial Trading Capital ($)", font=(FONT_FAMILY, 8), fg="#6B7280", bg="#FFFFFF").pack(anchor="w")
+        self.entry_capital = ttk.Entry(f_cap, font=(FONT_FAMILY, 10, "bold"))
         self.entry_capital.insert(0, "10000")
-        self.entry_capital.pack(fill="x", pady=(2, 0))
+        self.entry_capital.pack(fill="x", pady=(2, 4))
 
-        f_lot = tk.Frame(row_cap, bg="#FFFFFF")
-        f_lot.pack(side="right", fill="x", expand=True, padx=(6, 0))
-        tk.Label(f_lot, text="Trade Lot Size", font=(FONT_FAMILY, 8), fg="#6B7280", bg="#FFFFFF").pack(anchor="w")
-        self.entry_lot = ttk.Entry(f_lot, font=(FONT_FAMILY, 9))
-        self.entry_lot.insert(0, "0.1")
-        self.entry_lot.pack(fill="x", pady=(2, 0))
+        # Quick Capital Preset Buttons ($1k, $5k, $10k, $25k, $50k)
+        f_pills = tk.Frame(body, bg="#FFFFFF")
+        f_pills.pack(fill="x", pady=(0, 10))
+        presets = ["1,000", "5,000", "10,000", "25,000", "50,000"]
+        for p in presets:
+            btn_p = tk.Button(
+                f_pills,
+                text=f"${p}",
+                font=(FONT_FAMILY, 7, "bold"),
+                bg="#F3F4F6",
+                fg="#374151",
+                activebackground="#E5E7EB",
+                relief="flat",
+                bd=0,
+                padx=2,
+                pady=2,
+                cursor="hand2",
+                command=lambda val=p.replace(",", ""): self._set_capital_preset(val)
+            )
+            btn_p.pack(side="left", expand=True, fill="x", padx=1)
 
-        row_sltp = tk.Frame(body, bg="#FFFFFF")
-        row_sltp.pack(fill="x", pady=(0, 6))
+        # Autonomous Reasoning Model Specifications Card
+        f_ai_specs = tk.Frame(body, bg="#F8FAFC", highlightbackground="#E2E8F0", highlightthickness=1, padx=8, pady=8)
+        f_ai_specs.pack(fill="x", pady=(0, 12))
 
-        f_sl = tk.Frame(row_sltp, bg="#FFFFFF")
-        f_sl.pack(side="left", fill="x", expand=True, padx=(0, 6))
-        tk.Label(f_sl, text="Stop Loss (Pips)", font=(FONT_FAMILY, 8), fg="#6B7280", bg="#FFFFFF").pack(anchor="w")
-        self.entry_sl = ttk.Entry(f_sl, font=(FONT_FAMILY, 9))
-        self.entry_sl.insert(0, "30")
-        self.entry_sl.pack(fill="x", pady=(2, 0))
+        h_ai = tk.Frame(f_ai_specs, bg="#F8FAFC")
+        h_ai.pack(fill="x", pady=(0, 4))
+        tk.Label(h_ai, text="[ REASONING MODEL AUTONOMOUS SETUP ]", font=(FONT_FAMILY, 7, "bold"), fg="#059669", bg="#F8FAFC").pack(side="left")
 
-        f_tp = tk.Frame(row_sltp, bg="#FFFFFF")
-        f_tp.pack(side="right", fill="x", expand=True, padx=(6, 0))
-        tk.Label(f_tp, text="Take Profit (Pips)", font=(FONT_FAMILY, 8), fg="#6B7280", bg="#FFFFFF").pack(anchor="w")
-        self.entry_tp = ttk.Entry(f_tp, font=(FONT_FAMILY, 9))
-        self.entry_tp.insert(0, "60")
-        self.entry_tp.pack(fill="x", pady=(2, 0))
-
-        # Spread
-        row_spd = tk.Frame(body, bg="#FFFFFF")
-        row_spd.pack(fill="x", pady=(0, 14))
-        tk.Label(row_spd, text="Broker Spread (Pips)", font=(FONT_FAMILY, 8), fg="#6B7280", bg="#FFFFFF").pack(side="left")
-        self.entry_spread = ttk.Entry(row_spd, width=8, font=(FONT_FAMILY, 9))
-        self.entry_spread.insert(0, "1.5")
-        self.entry_spread.pack(side="right")
+        specs = [
+            ("Risk Sizing:", "1.0% Equity Risk (Auto Lot Sizing)"),
+            ("Stop Loss:", "Dynamic Structural Swing + ATR Cushion"),
+            ("Take Profit:", "Strict 1:2 R:R Ratio Target (+2.0% Gain)"),
+            ("Protection:", "Auto Break-Even Trailing at +1R Profit"),
+            ("Broker Spread:", "Live Broker Auto-Detection (MT5 Specs)")
+        ]
+        for label, val in specs:
+            row_s = tk.Frame(f_ai_specs, bg="#F8FAFC")
+            row_s.pack(fill="x", pady=1)
+            tk.Label(row_s, text=label, font=(FONT_FAMILY, 7, "bold"), fg="#475569", bg="#F8FAFC", width=12, anchor="w").pack(side="left")
+            tk.Label(row_s, text=val, font=(FONT_FAMILY, 7), fg="#0F172A", bg="#F8FAFC", anchor="w").pack(side="left", fill="x", expand=True)
 
         # Action Buttons
         self.btn_run = tk.Button(
@@ -404,6 +412,11 @@ class BacktestingTab(tk.Frame):
 
         return {"main": val_lbl, "sub": sub_lbl}
 
+    def _set_capital_preset(self, val: str):
+        """Quick preset capital button handler."""
+        self.entry_capital.delete(0, tk.END)
+        self.entry_capital.insert(0, val)
+
     def _on_click_run(self):
         if self.is_running:
             return
@@ -421,16 +434,24 @@ class BacktestingTab(tk.Frame):
         d_from = datetime(year_int, 1, 1, tzinfo=timezone.utc)
         d_to = datetime(year_int, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
 
-        # Risk parameters
+        # Capital parameter (User specifies ONLY capital)
         try:
-            initial_capital = float(self.entry_capital.get())
-            lot_size = float(self.entry_lot.get())
-            sl_pips = float(self.entry_sl.get())
-            tp_pips = float(self.entry_tp.get())
-            spread_pips = float(self.entry_spread.get())
+            cap_str = self.entry_capital.get().replace(",", "").replace("$", "").strip()
+            initial_capital = float(cap_str)
+            if initial_capital <= 0:
+                raise ValueError
         except ValueError:
-            messagebox.showerror("Invalid Input", "Please enter valid numeric values for capital, lot, SL, TP, and spread.")
+            messagebox.showerror("Invalid Capital", "Please enter a valid positive trading capital amount (e.g. 10000).")
             return
+
+        # Execution parameters are set up autonomously by the Quantitative Reasoning Model
+        lot_size = 0.0   # 0.0 triggers dynamic institutional risk sizing (1.0% equity risk per trade)
+        sl_pips = 0.0    # 0.0 triggers dynamic structural swing SL + ATR shield
+        tp_pips = 0.0    # 0.0 triggers strict 1:2 Risk/Reward target (+2.0% profit)
+
+        # Auto-detect broker spread directly from MT5 terminal
+        s_info = self.connector.get_symbol_info(symbol)
+        spread_pips = float(s_info.get("spread_pips", 1.2)) if s_info and s_info.get("spread_pips", 0) > 0 else 1.2
 
         strategy_name = self.combo_strategy.get()
         params = {}
