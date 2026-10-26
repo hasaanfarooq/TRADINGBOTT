@@ -209,8 +209,8 @@ class BacktestingTab(tk.Frame):
 
             row3 = tk.Frame(self.f_strat_params, bg="#F9FAFB")
             row3.pack(fill="x")
-            tk.Label(row3, text="SL: Structural Swing", font=(FONT_FAMILY, 8), fg="#16A34A", bg="#F9FAFB").pack(side="left")
-            tk.Label(row3, text="TP: Broken Swing High/Low", font=(FONT_FAMILY, 8), fg="#16A34A", bg="#F9FAFB").pack(side="right")
+            tk.Label(row3, text="SL: Structural Swing", font=(FONT_FAMILY, 8), fg="#DC2626", bg="#F9FAFB").pack(side="left")
+            tk.Label(row3, text="TP: Goal 1:2 Risk/Reward", font=(FONT_FAMILY, 8, "bold"), fg="#16A34A", bg="#F9FAFB").pack(side="right")
 
         elif strategy == "EMA Crossover":
             row = tk.Frame(self.f_strat_params, bg="#F9FAFB")

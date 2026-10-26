@@ -91,7 +91,7 @@ All indicators are computed using deterministic vector math via `pandas` and `nu
      - Fibonacci 0.77–0.78 level: $\text{Fib}_{77} = H - 0.77 \times (H - L)$ for longs (or $L + 0.77 \times (H - L)$ for shorts).
      - **Entry Trigger**: Price retraces down/up into the $0.77 - 0.78$ zone and **closes back out of the zone in the direction of the bias**.
      - **Dynamic Structural Stop Loss**: Placed strictly below/above the swing anchor point ($L - \text{buffer}$ or $H + \text{buffer}$).
-     - **Dynamic Structural Take Profit**: Target 1.0 (the broken swing point).
+     - **Dynamic Take Profit (1:2 Risk/Reward)**: Goal targeted at exactly twice the structural risk distance: $\text{TP} = \text{Entry} \pm (2.0 \times |\text{Entry} - \text{SL}|)$.
 
 2. **EMA Trend Crossover (`EMA Crossover`)**:
    $$\text{EMA}_t = \text{Close}_t \times \alpha + \text{EMA}_{t-1} \times (1 - \alpha), \quad \alpha = \frac{2}{N + 1}$$

@@ -27,7 +27,7 @@ A high-performance, institutional-grade desktop trading workstation for **MetaTr
 - **Real-World Simulation**: Evaluates orders bar-by-bar using actual MT5 historical market data.
 - **Realistic Execution**: Incorporates broker bid/ask spread, pip distances, contract sizing, Take Profit (TP), and Stop Loss (SL).
 - **Algorithmic Strategies Included**:
-  - **HTF Bias + Fib 0.77-0.78 OTE**: Multi-timeframe institutional strategy checking Higher Timeframe (1H or 4H) Market Structure bias, calculating 15M Fibonacci retracement on broken structure, entering when price tests the 0.77–0.78 deep discount/premium zone and closes out in the bias direction, with dynamic structural SL and Target 1.0 TP.
+  - **HTF Bias + Fib 0.77-0.78 OTE**: Multi-timeframe institutional strategy checking Higher Timeframe (1H or 4H) Market Structure bias, calculating 15M Fibonacci retracement on broken structure, entering when price tests the 0.77–0.78 deep discount/premium zone and closes out in the bias direction, with dynamic structural SL and an exact 1:2 Risk/Reward Take Profit target.
   - **EMA Crossover**: Dual Exponential Moving Average trend following with customizable fast/slow periods.
   - **RSI Mean Reversion**: Momentum exhaustion with customizable RSI period and oversold/overbought thresholds.
   - **MACD Momentum**: Moving Average Convergence Divergence line crossovers with signal line confirmation.

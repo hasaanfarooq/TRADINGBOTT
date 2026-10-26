@@ -119,7 +119,8 @@ class StrategyEngine:
                         if active_setup["tested"] and c > fib_77 and c > o:
                             signals[i] = 1
                             dyn_sl[i] = round(L - buffer_dist, 5)
-                            dyn_tp[i] = round(H, 5)
+                            risk = c - dyn_sl[i]
+                            dyn_tp[i] = round(c + (2.0 * risk), 5) if risk > 0 else round(H, 5)
                             active_setup = None
                         elif l < L:
                             active_setup = None
@@ -140,7 +141,8 @@ class StrategyEngine:
                         if active_setup["tested"] and c < fib_77 and c < o:
                             signals[i] = -1
                             dyn_sl[i] = round(H + buffer_dist, 5)
-                            dyn_tp[i] = round(L, 5)
+                            risk = dyn_sl[i] - c
+                            dyn_tp[i] = round(c - (2.0 * risk), 5) if risk > 0 else round(L, 5)
                             active_setup = None
                         elif h > H:
                             active_setup = None
@@ -289,7 +291,7 @@ class Backtester:
                     # Check Dynamic Structural TP or Fixed TP
                     elif custom_tp > 0 and high_price >= custom_tp:
                         exit_price = custom_tp
-                        exit_reason = "Take Profit (Target 1.0)"
+                        exit_reason = "Take Profit (1:2 RR)"
                     elif fixed_tp_dist > 0 and high_price >= (entry_price + fixed_tp_dist):
                         exit_price = entry_price + fixed_tp_dist
                         exit_reason = "Take Profit"
@@ -309,7 +311,7 @@ class Backtester:
                     # Check Dynamic Structural TP or Fixed TP
                     elif custom_tp > 0 and low_price <= custom_tp:
                         exit_price = custom_tp
-                        exit_reason = "Take Profit (Target 1.0)"
+                        exit_reason = "Take Profit (1:2 RR)"
                     elif fixed_tp_dist > 0 and low_price <= (entry_price - fixed_tp_dist):
                         exit_price = entry_price - fixed_tp_dist
                         exit_reason = "Take Profit"
@@ -363,6 +365,10 @@ class Backtester:
                 dyn_tp_val = float(prev_row.get("dyn_tp", 0.0))
 
                 if sig == 1:  # BUY
+                    if dyn_sl_val > 0:
+                        risk = open_price - dyn_sl_val
+                        if risk > 0:
+                            dyn_tp_val = round(open_price + (2.0 * risk), 5)
                     open_pos = {
                         "type": "BUY",
                         "lot_size": self.lot_size,
@@ -372,6 +378,10 @@ class Backtester:
                         "tp_price": dyn_tp_val
                     }
                 elif sig == -1:  # SELL
+                    if dyn_sl_val > 0:
+                        risk = dyn_sl_val - open_price
+                        if risk > 0:
+                            dyn_tp_val = round(open_price - (2.0 * risk), 5)
                     open_pos = {
                         "type": "SELL",
                         "lot_size": self.lot_size,
