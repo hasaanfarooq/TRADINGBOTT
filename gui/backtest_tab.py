@@ -347,17 +347,17 @@ class BacktestingTab(tk.Frame):
         if strategy == "Tick Momentum Scalper":
             row_badge = tk.Frame(self.f_strat_params, bg="#F9FAFB")
             row_badge.pack(fill="x", pady=(0, 4))
-            tk.Label(row_badge, text="Tick Momentum Scalper", font=(FONT_FAMILY, 8, "bold"), fg="#2563EB", bg="#F9FAFB").pack(side="left")
-            tk.Label(row_badge, text="Sub-Second Micro Burst", font=(FONT_FAMILY, 8, "bold"), fg="#059669", bg="#F9FAFB").pack(side="right")
+            tk.Label(row_badge, text="High-Frequency Tick Scalper", font=(FONT_FAMILY, 8, "bold"), fg="#2563EB", bg="#F9FAFB").pack(side="left")
+            tk.Label(row_badge, text="Instant Green Scalp", font=(FONT_FAMILY, 8, "bold"), fg="#059669", bg="#F9FAFB").pack(side="right")
 
             row1 = tk.Frame(self.f_strat_params, bg="#F9FAFB")
             row1.pack(fill="x", pady=(0, 3))
 
             f_tp = tk.Frame(row1, bg="#F9FAFB")
             f_tp.pack(side="left", fill="x", expand=True, padx=(0, 2))
-            tk.Label(f_tp, text="Target Profit ($)", font=(FONT_FAMILY, 7, "bold"), fg="#16A34A", bg="#F9FAFB").pack(anchor="w")
-            self.param_tms_tp = ttk.Combobox(f_tp, values=["$1.00", "$1.50", "$2.00", "$2.50", "$3.00"], font=(FONT_FAMILY, 8), state="readonly")
-            self.param_tms_tp.set("$1.50")
+            tk.Label(f_tp, text="Profit Target", font=(FONT_FAMILY, 7, "bold"), fg="#16A34A", bg="#F9FAFB").pack(anchor="w")
+            self.param_tms_tp = ttk.Combobox(f_tp, values=["Instant Green (>$0.00)", "$0.10", "$0.20", "$0.50", "$1.00", "$1.50"], font=(FONT_FAMILY, 8), state="readonly")
+            self.param_tms_tp.set("Instant Green (>$0.00)")
             self.param_tms_tp.pack(fill="x", pady=(1, 0))
 
             f_sl = tk.Frame(row1, bg="#F9FAFB")
@@ -372,22 +372,22 @@ class BacktestingTab(tk.Frame):
 
             f_pos = tk.Frame(row2, bg="#F9FAFB")
             f_pos.pack(side="left", fill="x", expand=True, padx=(0, 2))
-            tk.Label(f_pos, text="Max Scale-In (Positions)", font=(FONT_FAMILY, 7, "bold"), fg="#374151", bg="#F9FAFB").pack(anchor="w")
-            self.param_tms_max_pos = ttk.Combobox(f_pos, values=["5", "10", "15", "20"], font=(FONT_FAMILY, 8), state="readonly")
-            self.param_tms_max_pos.set("10")
+            tk.Label(f_pos, text="Max Trades (Positions)", font=(FONT_FAMILY, 7, "bold"), fg="#374151", bg="#F9FAFB").pack(anchor="w")
+            self.param_tms_max_pos = ttk.Combobox(f_pos, values=["10", "20", "30", "40", "50"], font=(FONT_FAMILY, 8), state="readonly")
+            self.param_tms_max_pos.set("30")
             self.param_tms_max_pos.pack(fill="x", pady=(1, 0))
 
-            f_hold = tk.Frame(row2, bg="#F9FAFB")
-            f_hold.pack(side="right", fill="x", expand=True, padx=(2, 0))
-            tk.Label(f_hold, text="Stall Decay (Time Exit)", font=(FONT_FAMILY, 7, "bold"), fg="#D97706", bg="#F9FAFB").pack(anchor="w")
-            self.param_tms_hold = ttk.Combobox(f_hold, values=["30s", "45s", "60s"], font=(FONT_FAMILY, 8), state="readonly")
-            self.param_tms_hold.set("45s")
-            self.param_tms_hold.pack(fill="x", pady=(1, 0))
+            f_batch = tk.Frame(row2, bg="#F9FAFB")
+            f_batch.pack(side="right", fill="x", expand=True, padx=(2, 0))
+            tk.Label(f_batch, text="Burst Entry Batch", font=(FONT_FAMILY, 7, "bold"), fg="#2563EB", bg="#F9FAFB").pack(anchor="w")
+            self.param_tms_batch = ttk.Combobox(f_batch, values=["1", "2", "3", "5"], font=(FONT_FAMILY, 8), state="readonly")
+            self.param_tms_batch.set("3")
+            self.param_tms_batch.pack(fill="x", pady=(1, 0))
 
             row3 = tk.Frame(self.f_strat_params, bg="#F9FAFB")
             row3.pack(fill="x", pady=(3, 2))
-            tk.Label(row3, text="Basket Stop: -$15.00 limit", font=(FONT_FAMILY, 7, "bold"), fg="#991B1B", bg="#F9FAFB").pack(side="left")
-            tk.Label(row3, text="Breaker: 5 Losses Pause", font=(FONT_FAMILY, 7, "bold"), fg="#7C3AED", bg="#F9FAFB").pack(side="right")
+            tk.Label(row3, text="Stall Decay: 45s max hold", font=(FONT_FAMILY, 7, "bold"), fg="#D97706", bg="#F9FAFB").pack(side="left")
+            tk.Label(row3, text="Basket Stop: -$25.00 limit", font=(FONT_FAMILY, 7, "bold"), fg="#991B1B", bg="#F9FAFB").pack(side="right")
 
             row4 = tk.Frame(self.f_strat_params, bg="#F9FAFB")
             row4.pack(fill="x", pady=(2, 0))
@@ -781,10 +781,14 @@ class BacktestingTab(tk.Frame):
             params["bb_period"] = self.param_bb_period.get()
             params["bb_std"] = self.param_bb_std.get()
         elif strategy_name == "Tick Momentum Scalper":
-            try:
-                params["target_profit_usd"] = float(self.param_tms_tp.get().replace("$", ""))
-            except Exception:
-                params["target_profit_usd"] = 1.50
+            tp_text = self.param_tms_tp.get() if hasattr(self, "param_tms_tp") else "Instant Green"
+            if "Instant" in tp_text or "<=" in tp_text:
+                params["target_profit_usd"] = 0.01
+            else:
+                try:
+                    params["target_profit_usd"] = float(tp_text.replace("$", ""))
+                except Exception:
+                    params["target_profit_usd"] = 0.01
 
             try:
                 params["stop_loss_usd"] = float(self.param_tms_sl.get().replace("$", ""))
@@ -792,24 +796,25 @@ class BacktestingTab(tk.Frame):
                 params["stop_loss_usd"] = 2.50
 
             try:
-                params["max_hold_seconds"] = float(self.param_tms_hold.get().replace("s", ""))
-            except Exception:
-                params["max_hold_seconds"] = 45.0
-
-            try:
                 params["max_positions"] = int(self.param_tms_max_pos.get())
             except Exception:
-                params["max_positions"] = 10
+                params["max_positions"] = 30
 
-            params["cooldown_ms"] = 500
+            try:
+                params["batch_size"] = int(self.param_tms_batch.get())
+            except Exception:
+                params["batch_size"] = 3
+
+            params["max_hold_seconds"] = 45.0
+            params["cooldown_ms"] = 100
             params["burst_ticks"] = 10
             params["burst_agreement"] = 0.70
-            params["min_burst_pips"] = 0.8
+            params["min_burst_pips"] = 0.6
             params["max_spread_pips"] = 1.5
-            params["basket_stop_usd"] = 15.0
-            params["basket_pause_sec"] = 600
+            params["basket_stop_usd"] = 25.0
+            params["basket_pause_sec"] = 300
             params["max_consec_losses"] = 5
-            params["daily_loss_cap"] = 50.0
+            params["daily_loss_cap"] = 100.0
 
         self.is_running = True
         self.btn_run.config(text="SIMULATING REAL DATA...", state="disabled", bg="#D97706")

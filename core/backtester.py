@@ -473,26 +473,27 @@ class Backtester:
             df_ticks["ema50"] = df_ticks["bid"].ewm(span=500, adjust=False).mean()
 
         # Strategy Parameters
-        target_profit_usd = float(self.params.get("target_profit_usd", 1.50))
+        target_profit_usd = float(self.params.get("target_profit_usd", 0.01))
         stop_loss_usd = float(self.params.get("stop_loss_usd", 2.50))
         max_hold_sec = float(self.params.get("max_hold_seconds", 45.0))
-        max_positions = int(self.params.get("max_positions", 10))
-        cooldown_ms = int(self.params.get("cooldown_ms", 500))
+        max_positions = int(self.params.get("max_positions", 30))
+        batch_size = int(self.params.get("batch_size", 3))
+        cooldown_ms = int(self.params.get("cooldown_ms", 100))
         burst_ticks = int(self.params.get("burst_ticks", 10))
         burst_agreement = float(self.params.get("burst_agreement", 0.70))
-        min_burst_pips = float(self.params.get("min_burst_pips", 0.8))
+        min_burst_pips = float(self.params.get("min_burst_pips", 0.6))
         max_spread_pips = float(self.params.get("max_spread_pips", 1.5))
-        basket_stop_usd = float(self.params.get("basket_stop_usd", 15.0))
-        basket_pause_sec = int(self.params.get("basket_pause_sec", 600))
+        basket_stop_usd = float(self.params.get("basket_stop_usd", 25.0))
+        basket_pause_sec = int(self.params.get("basket_pause_sec", 300))
         max_consec_losses = int(self.params.get("max_consec_losses", 5))
-        daily_loss_cap = float(self.params.get("daily_loss_cap", 50.0))
+        daily_loss_cap = float(self.params.get("daily_loss_cap", 100.0))
 
         # Dynamic or fixed lot sizing
         if self.lot_size and self.lot_size > 0:
             pos_lot = self.lot_size
         else:
             # Scaled micro-lot calibrated to capital
-            pos_lot = max(0.01, round(self.initial_capital * 0.00001, 2))
+            pos_lot = max(0.01, round(self.initial_capital * 0.000005, 2))
 
         balance = self.initial_capital
         peak_balance = self.initial_capital
@@ -531,7 +532,7 @@ class Backtester:
                 curr_day = d
                 daily_loss = 0.0
 
-            # 1. Manage Active Positions Tick by Tick
+            # 1. Manage Active Positions Tick by Tick: Close AS SOON AS THEY ARE IN PROFIT!
             if positions:
                 total_floating_usd = 0.0
                 still_open = []
@@ -551,8 +552,9 @@ class Backtester:
                     exit_reason = None
                     exit_price = bid if p_type == "BUY" else ask
 
-                    if pnl >= target_profit_usd:
-                        exit_reason = f"Take Profit (+${pnl:.2f})"
+                    # Close the moment position turns into profit (as soon as in profit)!
+                    if (target_profit_usd <= 0.05 and pnl > 0.0) or (pnl >= target_profit_usd):
+                        exit_reason = f"Profit Scalp (+${pnl:.2f})"
                     elif pnl <= -stop_loss_usd:
                         exit_reason = f"Stop Loss (-${abs(pnl):.2f})"
                     elif hold_sec >= max_hold_sec:
@@ -668,29 +670,34 @@ class Backtester:
                 continue
 
             net_disp_pips = (mids[-1] - mids[0]) / self.pip_size
+            slots = min(batch_size, max_positions - len(positions))
+            if slots <= 0:
+                continue
 
             # BUY Entry
             if (up_ticks / total_active) >= burst_agreement and net_disp_pips >= min_burst_pips and ask > ema:
-                positions.append({
-                    "id": len(trades) + len(positions) + 1,
-                    "type": "BUY",
-                    "lot_size": pos_lot,
-                    "entry_price": ask,
-                    "entry_time_str": str(time_dts.iloc[i]),
-                    "entry_time_msc": t_msc
-                })
+                for _ in range(slots):
+                    positions.append({
+                        "id": len(trades) + len(positions) + 1,
+                        "type": "BUY",
+                        "lot_size": pos_lot,
+                        "entry_price": ask,
+                        "entry_time_str": str(time_dts.iloc[i]),
+                        "entry_time_msc": t_msc
+                    })
                 last_entry_time_msc = t_msc
 
             # SELL Entry
             elif (down_ticks / total_active) >= burst_agreement and net_disp_pips <= -min_burst_pips and bid < ema:
-                positions.append({
-                    "id": len(trades) + len(positions) + 1,
-                    "type": "SELL",
-                    "lot_size": pos_lot,
-                    "entry_price": bid,
-                    "entry_time_str": str(time_dts.iloc[i]),
-                    "entry_time_msc": t_msc
-                })
+                for _ in range(slots):
+                    positions.append({
+                        "id": len(trades) + len(positions) + 1,
+                        "type": "SELL",
+                        "lot_size": pos_lot,
+                        "entry_price": bid,
+                        "entry_time_str": str(time_dts.iloc[i]),
+                        "entry_time_msc": t_msc
+                    })
                 last_entry_time_msc = t_msc
 
         # Close any residual open positions at end of data
