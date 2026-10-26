@@ -208,9 +208,33 @@ class BacktestingTab(tk.Frame):
             tk.Label(row2, text="Zone: 0.77-0.78 Fib", font=(FONT_FAMILY, 8, "bold"), fg="#2563EB", bg="#F9FAFB").pack(side="right")
 
             row3 = tk.Frame(self.f_strat_params, bg="#F9FAFB")
-            row3.pack(fill="x")
+            row3.pack(fill="x", pady=(0, 4))
             tk.Label(row3, text="SL: Structural Swing", font=(FONT_FAMILY, 8), fg="#DC2626", bg="#F9FAFB").pack(side="left")
             tk.Label(row3, text="TP: Goal 1:2 Risk/Reward", font=(FONT_FAMILY, 8, "bold"), fg="#16A34A", bg="#F9FAFB").pack(side="right")
+
+            # Quantitative Reasoning & Thinking Controls
+            sep = tk.Frame(self.f_strat_params, bg="#E5E7EB", height=1)
+            sep.pack(fill="x", pady=4)
+
+            self.var_use_reasoning = tk.BooleanVar(value=True)
+            chk_reasoning = tk.Checkbutton(
+                self.f_strat_params,
+                text="Enable Quantitative Reasoning (Thinking Filter)",
+                variable=self.var_use_reasoning,
+                font=(FONT_FAMILY, 8, "bold"),
+                fg="#1E40AF",
+                bg="#F9FAFB",
+                activebackground="#F9FAFB"
+            )
+            chk_reasoning.pack(anchor="w")
+
+            row_score = tk.Frame(self.f_strat_params, bg="#F9FAFB")
+            row_score.pack(fill="x", pady=(2, 0))
+            tk.Label(row_score, text="Min Confluence Score:", font=(FONT_FAMILY, 8), fg="#4B5563", bg="#F9FAFB").pack(side="left")
+            self.combo_min_score = ttk.Combobox(row_score, values=["50", "55", "60", "65", "70", "75"], width=6, font=(FONT_FAMILY, 8), state="readonly")
+            self.combo_min_score.set("65")
+            self.combo_min_score.pack(side="left", padx=(6, 0))
+            tk.Label(row_score, text="/ 100 pts", font=(FONT_FAMILY, 8), fg="#6B7280", bg="#F9FAFB").pack(side="left")
 
         elif strategy == "EMA Crossover":
             row = tk.Frame(self.f_strat_params, bg="#F9FAFB")
@@ -333,7 +357,7 @@ class BacktestingTab(tk.Frame):
         tbl_body = tk.Frame(tbl_card, bg="#FFFFFF", padx=8, pady=8)
         tbl_body.pack(fill="both", expand=True)
 
-        cols = ("id", "type", "entry_time", "entry_price", "exit_time", "exit_price", "pips", "pnl", "reason")
+        cols = ("id", "type", "entry_time", "entry_price", "exit_time", "exit_price", "pips", "pnl", "score", "reason")
         self.tree = ttk.Treeview(tbl_body, columns=cols, show="headings", height=12)
 
         self.tree.heading("id", text="#")
@@ -344,17 +368,19 @@ class BacktestingTab(tk.Frame):
         self.tree.heading("exit_price", text="Exit Price")
         self.tree.heading("pips", text="Pips")
         self.tree.heading("pnl", text="Net P&L ($)")
+        self.tree.heading("score", text="Score")
         self.tree.heading("reason", text="Exit Reason")
 
-        self.tree.column("id", width=40, anchor="center")
-        self.tree.column("type", width=70, anchor="center")
-        self.tree.column("entry_time", width=140, anchor="center")
-        self.tree.column("entry_price", width=90, anchor="e")
-        self.tree.column("exit_time", width=140, anchor="center")
-        self.tree.column("exit_price", width=90, anchor="e")
-        self.tree.column("pips", width=70, anchor="e")
-        self.tree.column("pnl", width=90, anchor="e")
-        self.tree.column("reason", width=110, anchor="w")
+        self.tree.column("id", width=35, anchor="center")
+        self.tree.column("type", width=65, anchor="center")
+        self.tree.column("entry_time", width=135, anchor="center")
+        self.tree.column("entry_price", width=85, anchor="e")
+        self.tree.column("exit_time", width=135, anchor="center")
+        self.tree.column("exit_price", width=85, anchor="e")
+        self.tree.column("pips", width=65, anchor="e")
+        self.tree.column("pnl", width=85, anchor="e")
+        self.tree.column("score", width=55, anchor="center")
+        self.tree.column("reason", width=120, anchor="w")
 
         scroll_y = ttk.Scrollbar(tbl_body, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll_y.set)
@@ -417,6 +443,8 @@ class BacktestingTab(tk.Frame):
             params["swing_len_htf"] = 3
             params["swing_len_m15"] = 3
             params["buffer_pips"] = 2.0
+            params["use_reasoning"] = getattr(self, "var_use_reasoning", tk.BooleanVar(value=True)).get()
+            params["min_confluence_score"] = int(getattr(self, "combo_min_score", ttk.Combobox()).get() or "65")
             # For this strategy, execution is strictly on M15
             tf = mt5.TIMEFRAME_M15
         elif strategy_name == "EMA Crossover":
@@ -451,11 +479,21 @@ class BacktestingTab(tk.Frame):
             self.after(0, self._handle_backtest_error, f"Failed to fetch historical data: {msg}")
             return
 
-        # If multi-timeframe strategy, fetch Higher Timeframe data as well
+        # If multi-timeframe strategy or reasoning engine enabled, fetch HTF data
         if htf_tf is not None:
-            df_htf, htf_msg = self.connector.fetch_historical_data(symbol, htf_tf, d_from, d_to)
+            df_htf, _ = self.connector.fetch_historical_data(symbol, htf_tf, d_from, d_to)
             if df_htf is not None and len(df_htf) > 0:
                 params["df_htf"] = df_htf
+
+        # Pre-fetch H1, H4, and D1 for Quantitative Reasoning Engine
+        if params.get("use_reasoning", False):
+            self.log_callback("Reasoning Engine: Ingesting D1, 4H, and 1H market structure...", "INFO")
+            df_h1, _ = self.connector.fetch_historical_data(symbol, mt5.TIMEFRAME_H1, d_from, d_to)
+            df_h4, _ = self.connector.fetch_historical_data(symbol, mt5.TIMEFRAME_H4, d_from, d_to)
+            df_d1, _ = self.connector.fetch_historical_data(symbol, mt5.TIMEFRAME_D1, d_from, d_to)
+            params["df_h1"] = df_h1
+            params["df_h4"] = df_h4
+            params["df_d1"] = df_d1
 
         # 2. Get symbol specifications (point, pip size, contract size)
         s_info = self.connector.get_symbol_info(symbol)
@@ -523,7 +561,8 @@ class BacktestingTab(tk.Frame):
         self.card_drawdown["sub"].config(text=f"-{dd_pct:.2f}% Max Peak")
 
         self.card_trades_count["main"].config(text=f"{total_trades:,}")
-        self.card_trades_count["sub"].config(text=f"{wins} Won  |  {losses} Lost")
+        filtered_count = results.get("filtered_count", 0)
+        self.card_trades_count["sub"].config(text=f"{wins} Won | {losses} Lost | {filtered_count} Filtered")
 
         self.card_avg_win_loss["main"].config(text=f"${avg_win:,.2f} / ${avg_loss:,.2f}")
         rr = (avg_win / avg_loss) if avg_loss > 0 else 0
@@ -536,6 +575,7 @@ class BacktestingTab(tk.Frame):
         trades = results["trades"]
         for t in trades:
             tag = "WIN" if t["pnl"] > 0 else "LOSS"
+            score_display = f"{t.get('score', 100)} pts"
             self.tree.insert(
                 "",
                 "end",
@@ -548,14 +588,15 @@ class BacktestingTab(tk.Frame):
                     f"{t['exit_price']:.5f}",
                     f"{t['pips']:.1f}",
                     f"{'+' if t['pnl'] > 0 else ''}${t['pnl']:.2f}",
+                    score_display,
                     t["reason"]
                 ),
                 tags=(tag,)
             )
 
-        self.lbl_trade_count.config(text=f"{len(trades)} Trades on {total_bars:,} Real MT5 Bars")
+        self.lbl_trade_count.config(text=f"{len(trades)} Trades ({filtered_count} Filtered) on {total_bars:,} Bars")
         self.log_callback(
-            f"Backtest Finished: {strategy} | Net PnL: ${net_profit:,.2f} ({roi_pct:+.2f}%) | Win Rate: {win_rate:.1f}% | Trades: {total_trades}",
+            f"Backtest Finished: {strategy} | Net PnL: ${net_profit:,.2f} ({roi_pct:+.2f}%) | Win Rate: {win_rate:.1f}% | Approved: {total_trades} | Filtered Out: {filtered_count}",
             "SUCCESS" if net_profit >= 0 else "WARNING"
         )
 

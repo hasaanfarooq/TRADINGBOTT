@@ -31,7 +31,13 @@ A high-performance, institutional-grade desktop trading workstation for **MetaTr
   - **EMA Crossover**: Dual Exponential Moving Average trend following with customizable fast/slow periods.
   - **RSI Mean Reversion**: Momentum exhaustion with customizable RSI period and oversold/overbought thresholds.
   - **MACD Momentum**: Moving Average Convergence Divergence line crossovers with signal line confirmation.
-  - **Bollinger Breakout**: Volatility band expansion breakout strategy.
+- **Quantitative Trade Reasoning & Thinking Engine**:
+  - Automatically evaluates trades before execution using a 4-pillar confluence scoring model (0 to 100 points):
+    1. Multi-Timeframe Trend Alignment (Daily + 4H + 1H momentum).
+    2. Candle Anatomy & Rejection Price Action (wick absorption ratios, displacement bodies).
+    3. Liquidity Sweep Detection (Turtle Soup high/low grabs before reversals).
+    4. Volatility & ATR Regime (avoids low-liquidity holiday chop and freak news spikes).
+  - Filters out low-conviction setups to protect capital, tracking filtered setups on the dashboard.
 - **Performance Scorecard**:
   - Net Profit ($) and Return on Investment (ROI %).
   - Win Rate % (Winning vs. Losing Trades count).

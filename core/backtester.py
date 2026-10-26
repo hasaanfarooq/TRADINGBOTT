@@ -7,6 +7,7 @@ Calculates risk metrics, trade execution reports, and performance analytics.
 from typing import Dict, Any, List, Optional
 import pandas as pd
 import numpy as np
+from .reasoning_engine import TradeReasoningEngine
 
 
 class StrategyEngine:
@@ -254,11 +255,26 @@ class Backtester:
         max_drawdown_pct = 0.0
 
         trades: List[Dict[str, Any]] = []
+        rejected_trades: List[Dict[str, Any]] = []
         open_pos: Optional[Dict[str, Any]] = None
 
         fixed_sl_dist = self.stop_loss_pips * self.pip_size if self.stop_loss_pips > 0 else 0
         fixed_tp_dist = self.take_profit_pips * self.pip_size if self.take_profit_pips > 0 else 0
         spread_cost = self.spread_pips * self.pip_size
+
+        # Initialize Trade Reasoning Engine if enabled
+        use_reasoning = self.params.get("use_reasoning", True)
+        reasoning_engine = None
+        dfs = None
+        if use_reasoning:
+            min_score = int(self.params.get("min_confluence_score", 60))
+            reasoning_engine = TradeReasoningEngine(min_confluence_score=min_score)
+            dfs = TradeReasoningEngine.prepare_data(
+                df_m15=df,
+                df_h1=self.params.get("df_h1"),
+                df_h4=self.params.get("df_h4"),
+                df_d1=self.params.get("df_d1")
+            )
 
         # Iterate through bars chronologically
         for i in range(1, len(df)):
@@ -353,7 +369,9 @@ class Backtester:
                         "pnl": round(pnl_dollar, 2),
                         "pnl_pct": round((pnl_dollar / self.initial_capital) * 100, 2),
                         "balance": round(balance, 2),
-                        "reason": exit_reason
+                        "reason": exit_reason,
+                        "score": open_pos.get("score", 100),
+                        "thesis": open_pos.get("thesis", "Approved")
                     }
                     trades.append(trade_record)
                     open_pos = None
@@ -364,32 +382,63 @@ class Backtester:
                 dyn_sl_val = float(prev_row.get("dyn_sl", 0.0))
                 dyn_tp_val = float(prev_row.get("dyn_tp", 0.0))
 
-                if sig == 1:  # BUY
-                    if dyn_sl_val > 0:
-                        risk = open_price - dyn_sl_val
-                        if risk > 0:
-                            dyn_tp_val = round(open_price + (2.0 * risk), 5)
-                    open_pos = {
-                        "type": "BUY",
-                        "lot_size": self.lot_size,
-                        "entry_time": bar_time,
-                        "entry_price": open_price,
-                        "sl_price": dyn_sl_val,
-                        "tp_price": dyn_tp_val
-                    }
-                elif sig == -1:  # SELL
-                    if dyn_sl_val > 0:
-                        risk = dyn_sl_val - open_price
-                        if risk > 0:
-                            dyn_tp_val = round(open_price - (2.0 * risk), 5)
-                    open_pos = {
-                        "type": "SELL",
-                        "lot_size": self.lot_size,
-                        "entry_time": bar_time,
-                        "entry_price": open_price,
-                        "sl_price": dyn_sl_val,
-                        "tp_price": dyn_tp_val
-                    }
+                if sig != 0:
+                    cand_type = "BUY" if sig == 1 else "SELL"
+                    trade_thesis = "Approved"
+                    confluence_score = 100
+
+                    # Consult Quantitative Trade Reasoning Engine
+                    if reasoning_engine is not None and dfs is not None:
+                        eval_res = reasoning_engine.evaluate_candidate(
+                            direction=cand_type,
+                            bar_idx=i - 1,
+                            dfs=dfs,
+                            spread_pips=self.spread_pips,
+                            pip_size=self.pip_size
+                        )
+                        if not eval_res["approved"]:
+                            # Trade Reasoning Engine filtered out this low-quality setup
+                            rejected_trades.append({
+                                "time": bar_time,
+                                "type": cand_type,
+                                "score": eval_res["total_score"],
+                                "thesis": eval_res["thesis"]
+                            })
+                            continue
+                        trade_thesis = eval_res["thesis"]
+                        confluence_score = eval_res["total_score"]
+
+                    # Execute Approved Trade
+                    if sig == 1:  # BUY
+                        if dyn_sl_val > 0:
+                            risk = open_price - dyn_sl_val
+                            if risk > 0:
+                                dyn_tp_val = round(open_price + (2.0 * risk), 5)
+                        open_pos = {
+                            "type": "BUY",
+                            "lot_size": self.lot_size,
+                            "entry_time": bar_time,
+                            "entry_price": open_price,
+                            "sl_price": dyn_sl_val,
+                            "tp_price": dyn_tp_val,
+                            "score": confluence_score,
+                            "thesis": trade_thesis
+                        }
+                    elif sig == -1:  # SELL
+                        if dyn_sl_val > 0:
+                            risk = dyn_sl_val - open_price
+                            if risk > 0:
+                                dyn_tp_val = round(open_price - (2.0 * risk), 5)
+                        open_pos = {
+                            "type": "SELL",
+                            "lot_size": self.lot_size,
+                            "entry_time": bar_time,
+                            "entry_price": open_price,
+                            "sl_price": dyn_sl_val,
+                            "tp_price": dyn_tp_val,
+                            "score": confluence_score,
+                            "thesis": trade_thesis
+                        }
 
         # Close open trade on last bar if any
         if open_pos is not None:
@@ -417,7 +466,9 @@ class Backtester:
                 "pnl": round(pnl_dollar, 2),
                 "pnl_pct": round((pnl_dollar / self.initial_capital) * 100, 2),
                 "balance": round(balance, 2),
-                "reason": "End of Data"
+                "reason": "End of Data",
+                "score": open_pos.get("score", 100),
+                "thesis": open_pos.get("thesis", "Approved")
             }
             trades.append(trade_record)
 
@@ -446,6 +497,8 @@ class Backtester:
             "total_trades": total_trades,
             "winning_trades": win_count,
             "losing_trades": loss_count,
+            "filtered_count": len(rejected_trades),
+            "rejected_trades": rejected_trades,
             "win_rate": round(win_rate, 2),
             "profit_factor": round(profit_factor, 2),
             "max_drawdown_dollar": round(max_drawdown_dollar, 2),
@@ -454,3 +507,4 @@ class Backtester:
             "avg_loss": round(avg_loss, 2),
             "trades": trades
         }
+

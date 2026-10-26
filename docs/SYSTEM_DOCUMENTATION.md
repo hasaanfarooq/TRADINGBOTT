@@ -127,6 +127,44 @@ All indicators are computed using deterministic vector math via `pandas` and `nu
 
 ---
 
+### 3.5. Quantitative Trade Reasoning & Confluence Engine (`core/reasoning_engine.py`)
+
+Before any candidate trade signal is executed, the `TradeReasoningEngine` evaluates the setup across **4 quantitative pillars** and assigns a holistic Confluence Score from **0 to 100 points**:
+
+```text
+Trade Signal Triggered
+         │
+         ▼
+┌────────────────────────────────────────────────────────┐
+│  PILLAR 1: Multi-Timeframe Alignment (Max 30 pts)     │
+│  - Daily 50 EMA Macro Trend (+10 pts)                  │
+│  - 4-Hour 50 EMA Intermediate Flow (+10 pts)           │
+│  - 1-Hour 20 EMA Momentum Direction (+10 pts)          │
+├────────────────────────────────────────────────────────┤
+│  PILLAR 2: Candle Anatomy & Rejection (Max 25 pts)    │
+│  - Long Rejection Wick (>= 35% of total bar) (+15 pts) │
+│  - Strong Displacement Close in Bias Direction (+10)  │
+├────────────────────────────────────────────────────────┤
+│  PILLAR 3: Liquidity Sweep / Fakeout Grab (Max 25 pts)│
+│  - Turtle Soup Liquidity Sweep (+25 pts)               │
+│  - Tested Established Support/Resistance (+15 pts)     │
+├────────────────────────────────────────────────────────┤
+│  PILLAR 4: Volatility & ATR Regime (Max 20 pts)        │
+│  - ATR Expansion (not in dead chop regime) (+10 pts)   │
+│  - Orderly Bar Range vs. ATR (+10 pts)                 │
+└────────────────────────────────────────────────────────┘
+         │
+         ▼
+Score >= Min Threshold (e.g., 65/100)?
+├── YES ──> TRADE APPROVED (Executed with full trade thesis)
+└── NO  ──> TRADE REJECTED (Filtered out to protect capital)
+```
+
+- **Thesis Audit Trail**: Every trade stores its exact decision breakdown and score (e.g. `Score: 85/100 | [+] D1 Trend | [+] Strong Rejection Wick | [+] Liquidity Sweep`).
+- **Filtered Trades Telemetry**: The UI scorecard tracks the exact count of low-quality trades filtered out by the reasoning engine.
+
+---
+
 ## 4. User Interface Architecture (`gui/`)
 
 ### 4.1. Visual Style & Color System
