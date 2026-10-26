@@ -16,15 +16,145 @@ class StrategyEngine:
     def calculate_indicators(df: pd.DataFrame, strategy: str, params: Dict[str, Any]) -> pd.DataFrame:
         df = df.copy()
 
-        if strategy == "EMA Crossover":
+        # Initialize dynamic SL and TP columns
+        df["dyn_sl"] = 0.0
+        df["dyn_tp"] = 0.0
+        df["signal"] = 0
+
+        if strategy == "HTF Bias + Fib 0.77-0.78 OTE":
+            # Higher Timeframe Market Structure + M15 Fibonacci 0.77-0.78 Retracement
+            df_htf = params.get("df_htf", None)
+            swing_len_htf = int(params.get("swing_len_htf", 3))
+            swing_len_m15 = int(params.get("swing_len_m15", 3))
+            buffer_pips = float(params.get("buffer_pips", 2.0))
+            pip_size = float(params.get("pip_size", 0.0001))
+            buffer_dist = buffer_pips * pip_size
+
+            # If HTF data is provided, calculate HTF Market Structure bias (Pure HH / LL)
+            if df_htf is not None and len(df_htf) > swing_len_htf * 2:
+                htf_df = df_htf.copy()
+                n_htf = len(htf_df)
+                bias_htf = [0] * n_htf
+                last_sh_htf = np.nan
+                last_sl_htf = np.nan
+                curr_bias = 0
+
+                for i in range(n_htf):
+                    c_htf = htf_df["close"].iloc[i]
+                    if i >= swing_len_htf:
+                        idx = i - swing_len_htf
+                        if idx >= swing_len_htf and idx + swing_len_htf < n_htf:
+                            if htf_df["high"].iloc[idx] == htf_df["high"].iloc[idx - swing_len_htf : idx + swing_len_htf + 1].max():
+                                last_sh_htf = htf_df["high"].iloc[idx]
+                            if htf_df["low"].iloc[idx] == htf_df["low"].iloc[idx - swing_len_htf : idx + swing_len_htf + 1].min():
+                                last_sl_htf = htf_df["low"].iloc[idx]
+                    if not np.isnan(last_sh_htf) and c_htf > last_sh_htf:
+                        curr_bias = 1   # Bullish Market Structure (BOS)
+                    elif not np.isnan(last_sl_htf) and c_htf < last_sl_htf:
+                        curr_bias = -1  # Bearish Market Structure (BOS)
+                    bias_htf[i] = curr_bias
+
+                htf_df["htf_bias"] = bias_htf
+                merged = pd.merge_asof(
+                    df.sort_values("time"),
+                    htf_df[["time", "htf_bias"]].sort_values("time"),
+                    on="time",
+                    direction="backward"
+                )
+                df["htf_bias"] = merged["htf_bias"].fillna(0).values
+            else:
+                df["htf_bias"] = 1
+
+            # M15 Break of Structure and Fib 0.77 - 0.78 Retracement
+            n = len(df)
+            signals = [0] * n
+            dyn_sl = [0.0] * n
+            dyn_tp = [0.0] * n
+
+            last_sh = np.nan
+            last_sl = np.nan
+            active_setup = None
+
+            for i in range(n):
+                c = df["close"].iloc[i]
+                h = df["high"].iloc[i]
+                l = df["low"].iloc[i]
+                o = df["open"].iloc[i]
+                htf_bias = df["htf_bias"].iloc[i]
+
+                # Identify confirmed M15 swing points
+                if i >= swing_len_m15:
+                    idx = i - swing_len_m15
+                    if idx >= swing_len_m15 and idx + swing_len_m15 < n:
+                        if df["high"].iloc[idx] == df["high"].iloc[idx - swing_len_m15 : idx + swing_len_m15 + 1].max():
+                            last_sh = df["high"].iloc[idx]
+                        if df["low"].iloc[idx] == df["low"].iloc[idx - swing_len_m15 : idx + swing_len_m15 + 1].min():
+                            last_sl = df["low"].iloc[idx]
+
+                # 1. Detect Break of Structure aligned with HTF bias
+                if htf_bias == 1 and not np.isnan(last_sh) and c > last_sh:
+                    swing_l = last_sl if not np.isnan(last_sl) else df["low"].iloc[max(0, i - 20) : i].min()
+                    if c > swing_l:
+                        active_setup = {"type": "BULL", "L": swing_l, "H": h, "tested": False}
+                elif htf_bias == -1 and not np.isnan(last_sl) and c < last_sl:
+                    swing_h = last_sh if not np.isnan(last_sh) else df["high"].iloc[max(0, i - 20) : i].max()
+                    if swing_h > c:
+                        active_setup = {"type": "BEAR", "L": l, "H": swing_h, "tested": False}
+
+                # 2. Check Fibonacci 0.77 - 0.78 retracement on active setup
+                if active_setup is not None:
+                    if active_setup["type"] == "BULL":
+                        L = active_setup["L"]
+                        H = active_setup["H"]
+                        if h > H:
+                            active_setup["H"] = h
+                            H = h
+
+                        fib_77 = H - 0.77 * (H - L)
+
+                        if l <= fib_77 and l >= L:
+                            active_setup["tested"] = True
+
+                        # Closes back out of the zone in the direction of the bias
+                        if active_setup["tested"] and c > fib_77 and c > o:
+                            signals[i] = 1
+                            dyn_sl[i] = round(L - buffer_dist, 5)
+                            dyn_tp[i] = round(H, 5)
+                            active_setup = None
+                        elif l < L:
+                            active_setup = None
+
+                    elif active_setup["type"] == "BEAR":
+                        L = active_setup["L"]
+                        H = active_setup["H"]
+                        if l < L:
+                            active_setup["L"] = l
+                            L = l
+
+                        fib_77 = L + 0.77 * (H - L)
+
+                        if h >= fib_77 and h <= H:
+                            active_setup["tested"] = True
+
+                        # Closes back out of the zone in the direction of the bias
+                        if active_setup["tested"] and c < fib_77 and c < o:
+                            signals[i] = -1
+                            dyn_sl[i] = round(H + buffer_dist, 5)
+                            dyn_tp[i] = round(L, 5)
+                            active_setup = None
+                        elif h > H:
+                            active_setup = None
+
+            df["signal"] = signals
+            df["dyn_sl"] = dyn_sl
+            df["dyn_tp"] = dyn_tp
+
+        elif strategy == "EMA Crossover":
             fast_p = int(params.get("fast_ema", 9))
             slow_p = int(params.get("slow_ema", 21))
             df["fast_ema"] = df["close"].ewm(span=fast_p, adjust=False).mean()
             df["slow_ema"] = df["close"].ewm(span=slow_p, adjust=False).mean()
 
-            # Signal: 1 for BUY, -1 for SELL, 0 for HOLD
-            df["signal"] = 0
-            # Crossover logic
             buy_cond = (df["fast_ema"] > df["slow_ema"]) & (df["fast_ema"].shift(1) <= df["slow_ema"].shift(1))
             sell_cond = (df["fast_ema"] < df["slow_ema"]) & (df["fast_ema"].shift(1) >= df["slow_ema"].shift(1))
             df.loc[buy_cond, "signal"] = 1
@@ -43,10 +173,7 @@ class StrategyEngine:
             rs = avg_gain / avg_loss.replace(0, np.nan)
             df["rsi"] = 100 - (100 / (1 + rs))
 
-            df["signal"] = 0
-            # Buy when RSI crosses above oversold level from below
             buy_cond = (df["rsi"] > oversold) & (df["rsi"].shift(1) <= oversold)
-            # Sell when RSI crosses below overbought level from above
             sell_cond = (df["rsi"] < overbought) & (df["rsi"].shift(1) >= overbought)
             df.loc[buy_cond, "signal"] = 1
             df.loc[sell_cond, "signal"] = -1
@@ -61,7 +188,6 @@ class StrategyEngine:
             df["macd"] = ema_fast - ema_slow
             df["macd_signal"] = df["macd"].ewm(span=signal_p, adjust=False).mean()
 
-            df["signal"] = 0
             buy_cond = (df["macd"] > df["macd_signal"]) & (df["macd"].shift(1) <= df["macd_signal"].shift(1))
             sell_cond = (df["macd"] < df["macd_signal"]) & (df["macd"].shift(1) >= df["macd_signal"].shift(1))
             df.loc[buy_cond, "signal"] = 1
@@ -76,14 +202,10 @@ class StrategyEngine:
             df["bb_upper"] = df["bb_mid"] + (df["bb_std"] * std_dev)
             df["bb_lower"] = df["bb_mid"] - (df["bb_std"] * std_dev)
 
-            df["signal"] = 0
             buy_cond = (df["close"] > df["bb_upper"]) & (df["close"].shift(1) <= df["bb_upper"].shift(1))
             sell_cond = (df["close"] < df["bb_lower"]) & (df["close"].shift(1) >= df["bb_lower"].shift(1))
             df.loc[buy_cond, "signal"] = 1
             df.loc[sell_cond, "signal"] = -1
-
-        else:
-            df["signal"] = 0
 
         return df
 
@@ -132,8 +254,8 @@ class Backtester:
         trades: List[Dict[str, Any]] = []
         open_pos: Optional[Dict[str, Any]] = None
 
-        sl_dist = self.stop_loss_pips * self.pip_size if self.stop_loss_pips > 0 else 0
-        tp_dist = self.take_profit_pips * self.pip_size if self.take_profit_pips > 0 else 0
+        fixed_sl_dist = self.stop_loss_pips * self.pip_size if self.stop_loss_pips > 0 else 0
+        fixed_tp_dist = self.take_profit_pips * self.pip_size if self.take_profit_pips > 0 else 0
         spread_cost = self.spread_pips * self.pip_size
 
         # Iterate through bars chronologically
@@ -151,17 +273,25 @@ class Backtester:
                 p_type = open_pos["type"]
                 entry_price = open_pos["entry_price"]
                 pos_lot = open_pos["lot_size"]
+                custom_sl = open_pos.get("sl_price", 0.0)
+                custom_tp = open_pos.get("tp_price", 0.0)
                 exit_price = None
                 exit_reason = None
 
                 if p_type == "BUY":
-                    # Check Stop Loss
-                    if sl_dist > 0 and low_price <= (entry_price - sl_dist):
-                        exit_price = entry_price - sl_dist
+                    # Check Dynamic Structural SL or Fixed SL
+                    if custom_sl > 0 and low_price <= custom_sl:
+                        exit_price = custom_sl
+                        exit_reason = "Stop Loss (Structural)"
+                    elif fixed_sl_dist > 0 and low_price <= (entry_price - fixed_sl_dist):
+                        exit_price = entry_price - fixed_sl_dist
                         exit_reason = "Stop Loss"
-                    # Check Take Profit
-                    elif tp_dist > 0 and high_price >= (entry_price + tp_dist):
-                        exit_price = entry_price + tp_dist
+                    # Check Dynamic Structural TP or Fixed TP
+                    elif custom_tp > 0 and high_price >= custom_tp:
+                        exit_price = custom_tp
+                        exit_reason = "Take Profit (Target 1.0)"
+                    elif fixed_tp_dist > 0 and high_price >= (entry_price + fixed_tp_dist):
+                        exit_price = entry_price + fixed_tp_dist
                         exit_reason = "Take Profit"
                     # Check Reverse Signal
                     elif prev_row["signal"] == -1:
@@ -169,13 +299,19 @@ class Backtester:
                         exit_reason = "Reverse Signal"
 
                 elif p_type == "SELL":
-                    # Check Stop Loss
-                    if sl_dist > 0 and high_price >= (entry_price + sl_dist):
-                        exit_price = entry_price + sl_dist
+                    # Check Dynamic Structural SL or Fixed SL
+                    if custom_sl > 0 and high_price >= custom_sl:
+                        exit_price = custom_sl
+                        exit_reason = "Stop Loss (Structural)"
+                    elif fixed_sl_dist > 0 and high_price >= (entry_price + fixed_sl_dist):
+                        exit_price = entry_price + fixed_sl_dist
                         exit_reason = "Stop Loss"
-                    # Check Take Profit
-                    elif tp_dist > 0 and low_price <= (entry_price - tp_dist):
-                        exit_price = entry_price - tp_dist
+                    # Check Dynamic Structural TP or Fixed TP
+                    elif custom_tp > 0 and low_price <= custom_tp:
+                        exit_price = custom_tp
+                        exit_reason = "Take Profit (Target 1.0)"
+                    elif fixed_tp_dist > 0 and low_price <= (entry_price - fixed_tp_dist):
+                        exit_price = entry_price - fixed_tp_dist
                         exit_reason = "Take Profit"
                     # Check Reverse Signal
                     elif prev_row["signal"] == 1:
@@ -223,19 +359,26 @@ class Backtester:
             # 2. Check for New Entry on Previous Bar's completed signal
             if open_pos is None:
                 sig = prev_row["signal"]
+                dyn_sl_val = float(prev_row.get("dyn_sl", 0.0))
+                dyn_tp_val = float(prev_row.get("dyn_tp", 0.0))
+
                 if sig == 1:  # BUY
                     open_pos = {
                         "type": "BUY",
                         "lot_size": self.lot_size,
                         "entry_time": bar_time,
-                        "entry_price": open_price
+                        "entry_price": open_price,
+                        "sl_price": dyn_sl_val,
+                        "tp_price": dyn_tp_val
                     }
                 elif sig == -1:  # SELL
                     open_pos = {
                         "type": "SELL",
                         "lot_size": self.lot_size,
                         "entry_time": bar_time,
-                        "entry_price": open_price
+                        "entry_price": open_price,
+                        "sl_price": dyn_sl_val,
+                        "tp_price": dyn_tp_val
                     }
 
         # Close open trade on last bar if any

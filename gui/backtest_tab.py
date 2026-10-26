@@ -90,6 +90,7 @@ class BacktestingTab(tk.Frame):
         self.combo_strategy = ttk.Combobox(
             body,
             values=[
+                "HTF Bias + Fib 0.77-0.78 OTE",
                 "EMA Crossover",
                 "RSI Mean Reversion",
                 "MACD Momentum",
@@ -98,14 +99,14 @@ class BacktestingTab(tk.Frame):
             font=(FONT_FAMILY, 9),
             state="readonly"
         )
-        self.combo_strategy.set("EMA Crossover")
+        self.combo_strategy.set("HTF Bias + Fib 0.77-0.78 OTE")
         self.combo_strategy.bind("<<ComboboxSelected>>", self._on_strategy_change)
         self.combo_strategy.pack(fill="x", pady=(2, 10))
 
         # Dynamic Strategy Params Frame
         self.f_strat_params = tk.Frame(body, bg="#F9FAFB", highlightbackground="#E5E7EB", highlightthickness=1, padx=10, pady=8)
         self.f_strat_params.pack(fill="x", pady=(0, 12))
-        self._render_strategy_params("EMA Crossover")
+        self._render_strategy_params("HTF Bias + Fib 0.77-0.78 OTE")
 
         # Capital & Risk Controls
         tk.Label(body, text="CAPITAL & EXECUTION CONTROLS", font=(FONT_FAMILY, 8, "bold"), fg="#2563EB", bg="#FFFFFF").pack(anchor="w", pady=(0, 4))
@@ -192,7 +193,26 @@ class BacktestingTab(tk.Frame):
         for child in self.f_strat_params.winfo_children():
             child.destroy()
 
-        if strategy == "EMA Crossover":
+        if strategy == "HTF Bias + Fib 0.77-0.78 OTE":
+            row1 = tk.Frame(self.f_strat_params, bg="#F9FAFB")
+            row1.pack(fill="x", pady=(0, 4))
+
+            tk.Label(row1, text="Higher Timeframe Bias", font=(FONT_FAMILY, 8, "bold"), fg="#111827", bg="#F9FAFB").pack(side="left")
+            self.param_fib_htf = ttk.Combobox(row1, values=["H1 (1 Hour)", "H4 (4 Hours)"], width=13, font=(FONT_FAMILY, 8), state="readonly")
+            self.param_fib_htf.set("H1 (1 Hour)")
+            self.param_fib_htf.pack(side="right")
+
+            row2 = tk.Frame(self.f_strat_params, bg="#F9FAFB")
+            row2.pack(fill="x", pady=(0, 2))
+            tk.Label(row2, text="Execution TF: M15 (15 Min)", font=(FONT_FAMILY, 8), fg="#4B5563", bg="#F9FAFB").pack(side="left")
+            tk.Label(row2, text="Zone: 0.77-0.78 Fib", font=(FONT_FAMILY, 8, "bold"), fg="#2563EB", bg="#F9FAFB").pack(side="right")
+
+            row3 = tk.Frame(self.f_strat_params, bg="#F9FAFB")
+            row3.pack(fill="x")
+            tk.Label(row3, text="SL: Structural Swing", font=(FONT_FAMILY, 8), fg="#16A34A", bg="#F9FAFB").pack(side="left")
+            tk.Label(row3, text="TP: Broken Swing High/Low", font=(FONT_FAMILY, 8), fg="#16A34A", bg="#F9FAFB").pack(side="right")
+
+        elif strategy == "EMA Crossover":
             row = tk.Frame(self.f_strat_params, bg="#F9FAFB")
             row.pack(fill="x")
             
@@ -389,7 +409,17 @@ class BacktestingTab(tk.Frame):
         strategy_name = self.combo_strategy.get()
         params = {}
 
-        if strategy_name == "EMA Crossover":
+        htf_tf = None
+        if strategy_name == "HTF Bias + Fib 0.77-0.78 OTE":
+            htf_choice = self.param_fib_htf.get()
+            htf_tf = TIMEFRAME_MAP.get(htf_choice, mt5.TIMEFRAME_H1)
+            params["htf_name"] = htf_choice
+            params["swing_len_htf"] = 3
+            params["swing_len_m15"] = 3
+            params["buffer_pips"] = 2.0
+            # For this strategy, execution is strictly on M15
+            tf = mt5.TIMEFRAME_M15
+        elif strategy_name == "EMA Crossover":
             params["fast_ema"] = self.param_fast_ema.get()
             params["slow_ema"] = self.param_slow_ema.get()
         elif strategy_name == "RSI Mean Reversion":
@@ -406,23 +436,30 @@ class BacktestingTab(tk.Frame):
 
         self.is_running = True
         self.btn_run.config(text="SIMULATING REAL DATA...", state="disabled", bg="#D97706")
-        self.log_callback(f"Starting Quantitative Backtest: {strategy_name} on {symbol} (Year: {year_sel}, TF: {tf_name})...", "INFO")
+        self.log_callback(f"Starting Quantitative Backtest: {strategy_name} on {symbol} (Year: {year_sel})...", "INFO")
 
         threading.Thread(
             target=self._threaded_backtest,
-            args=(symbol, tf, d_from, d_to, strategy_name, params, initial_capital, lot_size, sl_pips, tp_pips, spread_pips),
+            args=(symbol, tf, d_from, d_to, strategy_name, params, initial_capital, lot_size, sl_pips, tp_pips, spread_pips, htf_tf),
             daemon=True
         ).start()
 
-    def _threaded_backtest(self, symbol, tf, d_from, d_to, strategy_name, params, capital, lot, sl, tp, spread):
+    def _threaded_backtest(self, symbol, tf, d_from, d_to, strategy_name, params, capital, lot, sl, tp, spread, htf_tf=None):
         # 1. Fetch real historical data from MT5
         df, msg = self.connector.fetch_historical_data(symbol, tf, d_from, d_to)
         if df is None or len(df) == 0:
             self.after(0, self._handle_backtest_error, f"Failed to fetch historical data: {msg}")
             return
 
+        # If multi-timeframe strategy, fetch Higher Timeframe data as well
+        if htf_tf is not None:
+            df_htf, htf_msg = self.connector.fetch_historical_data(symbol, htf_tf, d_from, d_to)
+            if df_htf is not None and len(df_htf) > 0:
+                params["df_htf"] = df_htf
+
         # 2. Get symbol specifications (point, pip size, contract size)
         s_info = self.connector.get_symbol_info(symbol)
+        params["pip_size"] = s_info["pip_size"]
 
         # 3. Execute backtesting simulation
         bt = Backtester(

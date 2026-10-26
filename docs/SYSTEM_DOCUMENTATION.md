@@ -84,7 +84,16 @@ MT5 API calls are wrapped in Python's `threading.Lock()` (`self._lock`) to ensur
 #### Strategy Math & Indicator Calculations (`StrategyEngine`)
 All indicators are computed using deterministic vector math via `pandas` and `numpy`:
 
-1. **EMA Trend Crossover (`EMA Crossover`)**:
+1. **HTF Market Structure & M15 Fibonacci 0.77–0.78 Retracement (`HTF Bias + Fib 0.77-0.78 OTE`)**:
+   - **Higher Timeframe Bias (1H / 4H)**: Evaluates Pure Market Structure on the higher timeframe. A **Bullish Break of Structure (BOS)** occurs when a candle closes above the prior Swing High; a **Bearish BOS** occurs when a candle closes below the prior Swing Low.
+   - **M15 Fibonacci Deep Retracement**:
+     - When M15 structure breaks in the direction of the HTF bias, an impulse leg between Swing Low $L$ and Swing High $H$ is mapped.
+     - Fibonacci 0.77–0.78 level: $\text{Fib}_{77} = H - 0.77 \times (H - L)$ for longs (or $L + 0.77 \times (H - L)$ for shorts).
+     - **Entry Trigger**: Price retraces down/up into the $0.77 - 0.78$ zone and **closes back out of the zone in the direction of the bias**.
+     - **Dynamic Structural Stop Loss**: Placed strictly below/above the swing anchor point ($L - \text{buffer}$ or $H + \text{buffer}$).
+     - **Dynamic Structural Take Profit**: Target 1.0 (the broken swing point).
+
+2. **EMA Trend Crossover (`EMA Crossover`)**:
    $$\text{EMA}_t = \text{Close}_t \times \alpha + \text{EMA}_{t-1} \times (1 - \alpha), \quad \alpha = \frac{2}{N + 1}$$
    - **Buy Signal (1)**: Fast EMA crosses strictly above Slow EMA ($\text{EMA}_{\text{fast}, t} > \text{EMA}_{\text{slow}, t}$ and $\text{EMA}_{\text{fast}, t-1} \le \text{EMA}_{\text{slow}, t-1}$).
    - **Sell Signal (-1)**: Fast EMA crosses strictly below Slow EMA.
