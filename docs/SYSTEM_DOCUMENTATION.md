@@ -84,7 +84,31 @@ MT5 API calls are wrapped in Python's `threading.Lock()` (`self._lock`) to ensur
 #### Strategy Math & Indicator Calculations (`StrategyEngine`)
 All indicators are computed using deterministic vector math via `pandas` and `numpy`:
 
-1. **HTF Market Structure & M15 Fibonacci 0.77–0.78 Retracement (`HTF Bias + Fib 0.77-0.78 OTE`)**:
+1. **CRT Range + CISD/FVG Institutional Model (`CRT Range + CISD/FVG (A++ Institutional)`)**:
+   - **Market Narrative / DOL (Draw on Liquidity)**:
+     - Multi-timeframe trend alignment across **Daily (D1)**, **4-Hour (H4)**, and **1-Hour (H1)**.
+     - D1 Macro Order Flow: Evaluated via 50 EMA and structural swing highs/lows.
+     - H4 Intermediate Flow: Evaluated via 50 EMA and directional momentum.
+     - **A++ Confluence Requirement**: Setup MUST have **$>2$ timeframes in agreement** ($\ge 3$ timeframes aligned in the direction of the trade). If fewer than 3 timeframes align, the setup is rejected.
+   - **Candle Range Theory (CRT) Range Anchor**:
+     - On the Higher Timeframe (e.g., H1 or H4), a key swing candle establishes the trading range: $[\text{CRT}_{\text{Low}}, \text{CRT}_{\text{High}}]$.
+     - **Liquidity Sweep**: Price sweeps outside the CRT candle range:
+       - Bullish Setup: Sweeps below $\text{CRT}_{\text{Low}}$ (sell-side liquidity grab), but immediately rejects and closes back inside the range.
+       - Bearish Setup: Sweeps above $\text{CRT}_{\text{High}}$ (buy-side liquidity grab / turtle soup), but immediately rejects and closes back inside the range.
+   - **Execution Timeframe Confirmation (CISD + FVG/IFVG)**:
+     - On the Lower Timeframe (M15), price must print a confirmed **Change In State of Delivery (CISD)**:
+       - Bullish: Strong displacement candle closing above the highest open/body of the down-close delivery sequence into the low.
+       - Bearish: Strong displacement candle closing below the lowest open/body of the up-close delivery sequence into the high.
+     - Formed with a 3-candle **Fair Value Gap (FVG)** imbalance ($\text{Low}_{i} > \text{High}_{i-2}$ for buy, $\text{High}_{i} < \text{Low}_{i-2}$ for sell) or tap into an Inverted FVG (IFVG).
+   - **Stop Loss**: Placed strictly on top/bottom of the CISD candle anchor with ATR volatility cushioning ($\text{CISD} \pm \text{buffer}$).
+   - **Take Profit Target**: Targets the opposite side of the CRT candle range:
+     - Bullish Target: $\text{CRT}_{\text{High}}$ (the other high of the CRT range).
+     - Bearish Target: $\text{CRT}_{\text{Low}}$ (the other low of the CRT range).
+   - **Position Sizing & Risk Management**:
+     - Strict 1.0% equity risk per trade: $\text{Lot} = \frac{\text{Capital} \times 0.01}{\text{Risk Distance} \times \text{Contract Size}}$.
+     - Automatic Break-Even trailing when price reaches $+1.0\text{R}$ in profit.
+
+2. **HTF Market Structure & M15 Fibonacci 0.77–0.78 Retracement (`HTF Bias + Fib 0.77-0.78 OTE`)**:
    - **Higher Timeframe Bias (1H / 4H)**: Evaluates Pure Market Structure on the higher timeframe. A **Bullish Break of Structure (BOS)** occurs when a candle closes above the prior Swing High; a **Bearish BOS** occurs when a candle closes below the prior Swing Low.
    - **M15 Fibonacci Deep Retracement**:
      - When M15 structure breaks in the direction of the HTF bias, an impulse leg between Swing Low $L$ and Swing High $H$ is mapped.
@@ -93,7 +117,7 @@ All indicators are computed using deterministic vector math via `pandas` and `nu
      - **Dynamic Structural Stop Loss**: Placed strictly below/above the swing anchor point ($L - \text{buffer}$ or $H + \text{buffer}$).
      - **Dynamic Take Profit (1:2 Risk/Reward)**: Goal targeted at exactly twice the structural risk distance: $\text{TP} = \text{Entry} \pm (2.0 \times |\text{Entry} - \text{SL}|)$.
 
-2. **EMA Trend Crossover (`EMA Crossover`)**:
+3. **EMA Trend Crossover (`EMA Crossover`)**:
    $$\text{EMA}_t = \text{Close}_t \times \alpha + \text{EMA}_{t-1} \times (1 - \alpha), \quad \alpha = \frac{2}{N + 1}$$
    - **Buy Signal (1)**: Fast EMA crosses strictly above Slow EMA ($\text{EMA}_{\text{fast}, t} > \text{EMA}_{\text{slow}, t}$ and $\text{EMA}_{\text{fast}, t-1} \le \text{EMA}_{\text{slow}, t-1}$).
    - **Sell Signal (-1)**: Fast EMA crosses strictly below Slow EMA.

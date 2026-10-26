@@ -152,6 +152,7 @@ class BacktestingTab(tk.Frame):
         self.combo_strategy = ttk.Combobox(
             body,
             values=[
+                "CRT Range + CISD/FVG (A++ Institutional)",
                 "HTF Bias + Fib 0.77-0.78 OTE",
                 "EMA Crossover",
                 "RSI Mean Reversion",
@@ -161,14 +162,14 @@ class BacktestingTab(tk.Frame):
             font=(FONT_FAMILY, 9),
             state="readonly"
         )
-        self.combo_strategy.set("HTF Bias + Fib 0.77-0.78 OTE")
+        self.combo_strategy.set("CRT Range + CISD/FVG (A++ Institutional)")
         self.combo_strategy.bind("<<ComboboxSelected>>", self._on_strategy_change)
         self.combo_strategy.pack(fill="x", pady=(2, 8))
 
         # Dynamic Strategy Params Frame
         self.f_strat_params = tk.Frame(body, bg="#F9FAFB", highlightbackground="#E5E7EB", highlightthickness=1, padx=8, pady=6)
         self.f_strat_params.pack(fill="x", pady=(0, 8))
-        self._render_strategy_params("HTF Bias + Fib 0.77-0.78 OTE")
+        self._render_strategy_params("CRT Range + CISD/FVG (A++ Institutional)")
 
         # Capital Specification (The ONLY user-controlled parameter)
         tk.Label(body, text="CAPITAL ALLOCATION (USER INPUT)", font=(FONT_FAMILY, 8, "bold"), fg="#2563EB", bg="#FFFFFF").pack(anchor="w", pady=(0, 4))
@@ -229,7 +230,53 @@ class BacktestingTab(tk.Frame):
         for child in self.f_strat_params.winfo_children():
             child.destroy()
 
-        if strategy == "HTF Bias + Fib 0.77-0.78 OTE":
+        if strategy == "CRT Range + CISD/FVG (A++ Institutional)":
+            row1 = tk.Frame(self.f_strat_params, bg="#F9FAFB")
+            row1.pack(fill="x", pady=(0, 4))
+            tk.Label(row1, text="CRT Anchor Timeframe", font=(FONT_FAMILY, 8, "bold"), fg="#111827", bg="#F9FAFB").pack(side="left")
+            self.param_crt_htf = ttk.Combobox(row1, values=["H1 (1 Hour)", "H4 (4 Hours)"], width=13, font=(FONT_FAMILY, 8), state="readonly")
+            self.param_crt_htf.set("H1 (1 Hour)")
+            self.param_crt_htf.pack(side="right")
+
+            row2 = tk.Frame(self.f_strat_params, bg="#F9FAFB")
+            row2.pack(fill="x", pady=(0, 2))
+            tk.Label(row2, text="Execution TF: M15 (15 Min)", font=(FONT_FAMILY, 8), fg="#4B5563", bg="#F9FAFB").pack(side="left")
+            tk.Label(row2, text="Model: CISD + FVG/IFVG", font=(FONT_FAMILY, 8, "bold"), fg="#2563EB", bg="#F9FAFB").pack(side="right")
+
+            row3 = tk.Frame(self.f_strat_params, bg="#F9FAFB")
+            row3.pack(fill="x", pady=(0, 2))
+            tk.Label(row3, text="SL: Top/Bottom of CISD", font=(FONT_FAMILY, 8), fg="#DC2626", bg="#F9FAFB").pack(side="left")
+            tk.Label(row3, text="TP: Target Other CRT Side", font=(FONT_FAMILY, 8, "bold"), fg="#16A34A", bg="#F9FAFB").pack(side="right")
+
+            row4 = tk.Frame(self.f_strat_params, bg="#F9FAFB")
+            row4.pack(fill="x", pady=(0, 4))
+            tk.Label(row4, text="Narrative: Multi-TF (>2 TFs)", font=(FONT_FAMILY, 8, "bold"), fg="#059669", bg="#F9FAFB").pack(side="left")
+            tk.Label(row4, text="Grade: A++ Setup Only", font=(FONT_FAMILY, 8, "bold"), fg="#7C3AED", bg="#F9FAFB").pack(side="right")
+
+            sep = tk.Frame(self.f_strat_params, bg="#E5E7EB", height=1)
+            sep.pack(fill="x", pady=4)
+
+            self.var_use_reasoning = tk.BooleanVar(value=True)
+            chk_reasoning = tk.Checkbutton(
+                self.f_strat_params,
+                text="Enable A++ Reasoning Engine (Thinking Filter)",
+                variable=self.var_use_reasoning,
+                font=(FONT_FAMILY, 8, "bold"),
+                fg="#1E40AF",
+                bg="#F9FAFB",
+                activebackground="#F9FAFB"
+            )
+            chk_reasoning.pack(anchor="w")
+
+            row_score = tk.Frame(self.f_strat_params, bg="#F9FAFB")
+            row_score.pack(fill="x", pady=(2, 0))
+            tk.Label(row_score, text="Min Confluence Score:", font=(FONT_FAMILY, 8), fg="#4B5563", bg="#F9FAFB").pack(side="left")
+            self.combo_min_score = ttk.Combobox(row_score, values=["50", "55", "60", "65", "70", "75"], width=6, font=(FONT_FAMILY, 8), state="readonly")
+            self.combo_min_score.set("65")
+            self.combo_min_score.pack(side="left", padx=(6, 0))
+            tk.Label(row_score, text="/ 100 pts", font=(FONT_FAMILY, 8), fg="#6B7280", bg="#F9FAFB").pack(side="left")
+
+        elif strategy == "HTF Bias + Fib 0.77-0.78 OTE":
             row1 = tk.Frame(self.f_strat_params, bg="#F9FAFB")
             row1.pack(fill="x", pady=(0, 4))
 
@@ -485,7 +532,15 @@ class BacktestingTab(tk.Frame):
         params = {}
 
         htf_tf = None
-        if strategy_name == "HTF Bias + Fib 0.77-0.78 OTE":
+        if strategy_name == "CRT Range + CISD/FVG (A++ Institutional)":
+            htf_choice = getattr(self, "param_crt_htf", ttk.Combobox()).get() or "H1 (1 Hour)"
+            htf_tf = TIMEFRAME_MAP.get(htf_choice, mt5.TIMEFRAME_H1)
+            params["htf_name"] = htf_choice
+            params["buffer_pips"] = 2.0
+            params["use_reasoning"] = getattr(self, "var_use_reasoning", tk.BooleanVar(value=True)).get()
+            params["min_confluence_score"] = int(getattr(self, "combo_min_score", ttk.Combobox()).get() or "65")
+            tf = mt5.TIMEFRAME_M15
+        elif strategy_name == "HTF Bias + Fib 0.77-0.78 OTE":
             htf_choice = self.param_fib_htf.get()
             htf_tf = TIMEFRAME_MAP.get(htf_choice, mt5.TIMEFRAME_H1)
             params["htf_name"] = htf_choice
@@ -534,9 +589,9 @@ class BacktestingTab(tk.Frame):
             if df_htf is not None and len(df_htf) > 0:
                 params["df_htf"] = df_htf
 
-        # Pre-fetch H1, H4, and D1 for Quantitative Reasoning Engine
-        if params.get("use_reasoning", False):
-            self.log_callback("Reasoning Engine: Ingesting D1, 4H, and 1H market structure...", "INFO")
+        # Pre-fetch H1, H4, and D1 for Quantitative Reasoning Engine and Multi-Timeframe Narrative
+        if params.get("use_reasoning", False) or strategy_name.startswith("CRT"):
+            self.log_callback("Multi-Timeframe Narrative: Ingesting D1, 4H, and 1H market structure...", "INFO")
             df_h1, _ = self.connector.fetch_historical_data(symbol, mt5.TIMEFRAME_H1, d_from, d_to)
             df_h4, _ = self.connector.fetch_historical_data(symbol, mt5.TIMEFRAME_H4, d_from, d_to)
             df_d1, _ = self.connector.fetch_historical_data(symbol, mt5.TIMEFRAME_D1, d_from, d_to)

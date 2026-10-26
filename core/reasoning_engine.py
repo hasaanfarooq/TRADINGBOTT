@@ -130,18 +130,17 @@ class TradeReasoningEngine:
         }
 
         # -------------------------------------------------------------
-        # PILLAR 1: Multi-Timeframe Alignment (Max 30 pts)
+        # PILLAR 1: Multi-Timeframe Alignment & Narrative (Max 30 pts)
         # -------------------------------------------------------------
         mtf_pts = 0
-        d1_bull = None
-        h4_bull = None
-        h1_bull = None
+        confluences = 0
 
         # D1 Institutional Bias (10 pts)
         d1_bull = curr_bar.get("d1_bull")
         if pd.notna(d1_bull):
             if (direction == "BUY" and d1_bull) or (direction == "SELL" and not d1_bull):
                 mtf_pts += 10
+                confluences += 1
                 reasons.append("[+] D1 Macro Trend Aligned (+10)")
             else:
                 reasons.append("[-] Opposing D1 Macro Trend (0)")
@@ -151,6 +150,7 @@ class TradeReasoningEngine:
         if pd.notna(h4_bull):
             if (direction == "BUY" and h4_bull) or (direction == "SELL" and not h4_bull):
                 mtf_pts += 10
+                confluences += 1
                 reasons.append("[+] 4H Intermediate Flow Aligned (+10)")
             else:
                 reasons.append("[-] Opposing 4H Flow (0)")
@@ -160,9 +160,15 @@ class TradeReasoningEngine:
         if pd.notna(h1_bull):
             if (direction == "BUY" and h1_bull) or (direction == "SELL" and not h1_bull):
                 mtf_pts += 10
+                confluences += 1
                 reasons.append("[+] 1H Momentum Aligned (+10)")
             else:
                 reasons.append("[-] Opposing 1H Momentum (0)")
+
+        if confluences >= 3:
+            reasons.append(f"[★] A++ Multi-Timeframe Narrative Confirmed ({confluences}/3 TFs in Harmony)")
+        elif confluences >= 2:
+            reasons.append(f"[+] Strong Multi-Timeframe Narrative ({confluences}/3 TFs Aligned)")
 
         # If higher timeframes were not available, grant default baseline
         if d1 is None and h4 is None and h1 is None:

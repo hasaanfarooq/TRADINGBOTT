@@ -162,6 +162,163 @@ class StrategyEngine:
             df["dyn_sl"] = dyn_sl
             df["dyn_tp"] = dyn_tp
 
+        elif strategy == "CRT Range + CISD/FVG (A++ Institutional)":
+            # Candle Range Theory (CRT) + CISD + FVG/IFVG Execution with Multi-Timeframe Narrative (>2 TFs)
+            df_htf = params.get("df_htf", None)   # CRT Anchor Timeframe (H1 or H4)
+            df_h4 = params.get("df_h4", None)
+            df_d1 = params.get("df_d1", None)
+            pip_size = float(params.get("pip_size", 0.0001))
+            buffer_pips = float(params.get("buffer_pips", 2.0))
+            buffer_dist = buffer_pips * pip_size
+
+            # ATR14 on execution timeframe (M15)
+            hl = df["high"] - df["low"]
+            hc = (df["high"] - df["close"].shift(1)).abs()
+            lc = (df["low"] - df["close"].shift(1)).abs()
+            tr_series = pd.concat([hl, hc, lc], axis=1).max(axis=1)
+            atr14 = tr_series.rolling(window=14).mean().bfill()
+
+            # 1. Macro Narrative (D1 50 EMA)
+            if df_d1 is not None and len(df_d1) > 10:
+                d1 = df_d1.copy()
+                d1["d1_bias"] = np.where(d1["close"] > d1["close"].ewm(span=50, adjust=False).mean(), 1, -1)
+                df = pd.merge_asof(
+                    df.sort_values("time"),
+                    d1[["time", "d1_bias"]].sort_values("time"),
+                    on="time",
+                    direction="backward"
+                )
+            else:
+                df["d1_bias"] = 1
+
+            # 2. Intermediate Flow (H4 50 EMA)
+            if df_h4 is not None and len(df_h4) > 10:
+                h4 = df_h4.copy()
+                h4["h4_bias"] = np.where(h4["close"] > h4["close"].ewm(span=50, adjust=False).mean(), 1, -1)
+                df = pd.merge_asof(
+                    df.sort_values("time"),
+                    h4[["time", "h4_bias"]].sort_values("time"),
+                    on="time",
+                    direction="backward"
+                )
+            else:
+                df["h4_bias"] = 1
+
+            # 3. CRT Range on HTF (H1 or H4)
+            # Find swing high and swing low CRT candles
+            if df_htf is not None and len(df_htf) > 10:
+                htf = df_htf.copy()
+                htf_n = len(htf)
+                crt_highs = [np.nan] * htf_n
+                crt_lows = [np.nan] * htf_n
+                last_ch = np.nan
+                last_cl = np.nan
+
+                for j in range(2, htf_n - 2):
+                    # Confirmed swing high CRT candle
+                    if htf["high"].iloc[j] == htf["high"].iloc[j-2:j+3].max():
+                        last_ch = htf["high"].iloc[j]
+                        last_cl = htf["low"].iloc[j]
+                    # Confirmed swing low CRT candle
+                    if htf["low"].iloc[j] == htf["low"].iloc[j-2:j+3].min():
+                        last_ch = htf["high"].iloc[j]
+                        last_cl = htf["low"].iloc[j]
+                    crt_highs[j+2] = last_ch
+                    crt_lows[j+2] = last_cl
+
+                htf["crt_high"] = crt_highs
+                htf["crt_low"] = crt_lows
+                htf["h1_bias"] = np.where(htf["close"] > htf["close"].ewm(span=20, adjust=False).mean(), 1, -1)
+
+                df = pd.merge_asof(
+                    df.sort_values("time"),
+                    htf[["time", "crt_high", "crt_low", "h1_bias"]].sort_values("time"),
+                    on="time",
+                    direction="backward"
+                )
+            else:
+                df["crt_high"] = np.nan
+                df["crt_low"] = np.nan
+                df["h1_bias"] = 1
+
+            n = len(df)
+            signals = [0] * n
+            dyn_sl = [0.0] * n
+            dyn_tp = [0.0] * n
+
+            for i in range(3, n):
+                c = float(df["close"].iloc[i])
+                o = float(df["open"].iloc[i])
+                h = float(df["high"].iloc[i])
+                l = float(df["low"].iloc[i])
+                curr_atr = float(atr14.iloc[i]) if i < len(atr14) else 15.0 * pip_size
+
+                prev_c = float(df["close"].iloc[i-1])
+                prev_o = float(df["open"].iloc[i-1])
+                prev_h = float(df["high"].iloc[i-1])
+                prev_l = float(df["low"].iloc[i-1])
+                bar2_h = float(df["high"].iloc[i-2])
+                bar2_l = float(df["low"].iloc[i-2])
+
+                crt_h = float(df["crt_high"].iloc[i]) if pd.notna(df["crt_high"].iloc[i]) else np.nan
+                crt_l = float(df["crt_low"].iloc[i]) if pd.notna(df["crt_low"].iloc[i]) else np.nan
+                d1_b = df["d1_bias"].iloc[i]
+                h4_b = df["h4_bias"].iloc[i]
+                h1_b = df["h1_bias"].iloc[i]
+
+                if np.isnan(crt_h) or np.isnan(crt_l):
+                    continue
+
+                # -------------------------------------------------------------
+                # BULLISH A++ SETUP:
+                # 1. Narrative Check: > 2 Timeframes confirm Bullish (D1 + H4 + H1)
+                # 2. Liquidity Sweep: Price swept CRT Low and closed back above
+                # 3. CISD + FVG: LTF displacement candle closes above prior down-body, leaving FVG/IFVG
+                # 4. Target: Opposite CRT High
+                # -------------------------------------------------------------
+                bull_tfs = (1 if d1_b == 1 else 0) + (1 if h4_b == 1 else 0) + (1 if h1_b == 1 else 0)
+                if bull_tfs >= 2 and l <= crt_l and c > crt_l:
+                    # CISD: Change in State of Delivery (displacement closes above prior down-candle body)
+                    cisd_bull = (c > max(prev_o, prev_c)) and (c > o)
+                    # FVG: Fair Value Gap (3-bar imbalance: current low > bar2 high) OR strong displacement
+                    fvg_bull = (l > bar2_h) or ((c - o) > 1.2 * abs(prev_c - prev_o))
+
+                    if cisd_bull and fvg_bull and crt_h > c:
+                        # Stop Loss set on top/bottom of CISD anchor with ATR noise shield
+                        raw_risk = c - min(l, prev_l) + buffer_dist
+                        safe_risk = max(raw_risk, 1.2 * curr_atr, 12.0 * pip_size)
+                        target_dist = crt_h - c
+                        # Ensure favorable R:R to the CRT High
+                        if target_dist >= (1.5 * safe_risk):
+                            signals[i] = 1
+                            dyn_sl[i] = round(c - safe_risk, 5)
+                            dyn_tp[i] = round(crt_h, 5)
+
+                # -------------------------------------------------------------
+                # BEARISH A++ SETUP:
+                # 1. Narrative Check: > 2 Timeframes confirm Bearish
+                # 2. Liquidity Sweep: Price swept CRT High and closed back below
+                # 3. CISD + FVG: LTF displacement candle closes below prior up-body, leaving FVG/IFVG
+                # 4. Target: Opposite CRT Low
+                # -------------------------------------------------------------
+                bear_tfs = (1 if d1_b == -1 else 0) + (1 if h4_b == -1 else 0) + (1 if h1_b == -1 else 0)
+                if bear_tfs >= 2 and h >= crt_h and c < crt_h:
+                    cisd_bear = (c < min(prev_o, prev_c)) and (c < o)
+                    fvg_bear = (h < bar2_l) or ((o - c) > 1.2 * abs(prev_c - prev_o))
+
+                    if cisd_bear and fvg_bear and crt_l < c:
+                        raw_risk = max(h, prev_h) - c + buffer_dist
+                        safe_risk = max(raw_risk, 1.2 * curr_atr, 12.0 * pip_size)
+                        target_dist = c - crt_l
+                        if target_dist >= (1.5 * safe_risk):
+                            signals[i] = -1
+                            dyn_sl[i] = round(c + safe_risk, 5)
+                            dyn_tp[i] = round(crt_l, 5)
+
+            df["signal"] = signals
+            df["dyn_sl"] = dyn_sl
+            df["dyn_tp"] = dyn_tp
+
         elif strategy == "EMA Crossover":
             fast_p = int(params.get("fast_ema", 9))
             slow_p = int(params.get("slow_ema", 21))
