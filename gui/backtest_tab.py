@@ -1323,7 +1323,7 @@ class BacktestingTab(tk.Frame):
         self._switch_trade_view("EXECUTED")
 
         unit_name = "Ticks" if strategy == "Tick Momentum Scalper" else "Bars"
-        self.lbl_trade_count.config(text=f"{len(trades)} Trades ({filtered_count} Filtered) on {total_bars:,} {unit_name}")
+        self.lbl_trade_count.config(text=f"{len(self.current_trades)} Trades ({filtered_count} Filtered) on {total_bars:,} {unit_name}")
         self.log_callback(
             f"Backtest Finished: {strategy} | Net PnL: ${net_profit:,.2f} ({roi_pct:+.2f}%) | Win Rate: {win_rate:.1f}% | Approved: {total_trades} | Filtered Out: {filtered_count}",
             "SUCCESS" if net_profit >= 0 else "WARNING"
