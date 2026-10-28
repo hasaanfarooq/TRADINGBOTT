@@ -1,0 +1,80 @@
+{
+  "total_learned": 6,
+  "total_vetoed": 0,
+  "q_table": {
+    "BUY_ASIA_VOL_NORM_SLOPE_FLAT_STREAK_0": [
+      0.0,
+      0.2568
+    ],
+    "SELL_ASIA_VOL_NORM_SLOPE_FLAT_STREAK_1": [
+      0.0,
+      0.6335
+    ],
+    "SELL_ASIA_VOL_NORM_SLOPE_FLAT_STREAK_0": [
+      0.0,
+      0.257
+    ],
+    "SELL_OFF_VOL_NORM_SLOPE_FLAT_STREAK_1": [
+      0.0,
+      0.617
+    ],
+    "BUY_OFF_VOL_NORM_SLOPE_FLAT_STREAK_0": [
+      0.0,
+      0.257
+    ],
+    "BUY_OFF_VOL_NORM_SLOPE_FLAT_STREAK_1": [
+      0.0,
+      0.641
+    ]
+  },
+  "failure_signatures": [
+    {
+      "trade_id": 1,
+      "direction": "BUY",
+      "state_vector": [
+        0.083,
+        0.4,
+        0.24,
+        -0.002,
+        0.0,
+        0.6,
+        0.0
+      ],
+      "loss_amount": 112.11000000000469,
+      "r_multiple": -1.1212121212121156,
+      "exit_reason": "Stop Loss (Structural)"
+    },
+    {
+      "trade_id": 3,
+      "direction": "SELL",
+      "state_vector": [
+        0.042,
+        0.4,
+        0.24,
+        0.0,
+        0.0,
+        0.7,
+        0.0
+      ],
+      "loss_amount": 112.0000000000112,
+      "r_multiple": -1.1199999999999866,
+      "exit_reason": "Stop Loss (Structural)"
+    },
+    {
+      "trade_id": 5,
+      "direction": "BUY",
+      "state_vector": [
+        0.917,
+        0.4,
+        0.24,
+        0.0,
+        0.0,
+        0.6,
+        0.0
+      ],
+      "loss_amount": 112.0000000000112,
+      "r_multiple": -1.1199999999999866,
+      "exit_reason": "Stop Loss (Structural)"
+    }
+  ]
+}

@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Optional
 import pandas as pd
 import numpy as np
 from .reasoning_engine import TradeReasoningEngine
+from .rl_agent import RLTradeAgent
 
 
 class StrategyEngine:
@@ -1314,6 +1315,13 @@ class Backtester:
                 df_d1=self.params.get("df_d1")
             )
 
+        # Initialize Reinforcement Learning Memory Agent if enabled
+        use_rl = self.params.get("use_rl", True)
+        rl_agent = RLTradeAgent() if use_rl else None
+        if rl_agent is not None:
+            rl_agent.reset_episode()
+        rl_vetoed_count = 0
+
         # Iterate through bars chronologically
         for i in range(1, len(df)):
             prev_row = df.iloc[i - 1]
@@ -1426,6 +1434,16 @@ class Backtester:
                         "thesis": open_pos.get("thesis", "Approved"),
                         "thinking": open_pos.get("thinking", {})
                     }
+                    if rl_agent is not None and "rl_state_vec" in open_pos and open_pos["rl_state_vec"] is not None:
+                        rl_agent.record_trade_outcome(
+                            trade_id=len(trades) + 1,
+                            direction=p_type,
+                            state_vec=open_pos["rl_state_vec"],
+                            state_key=open_pos["rl_state_key"],
+                            pnl=pnl_dollar,
+                            risk_dollar=open_pos.get("risk_dist", 1.0) * pos_lot * self.contract_size,
+                            exit_reason=exit_reason
+                        )
                     trades.append(trade_record)
                     open_pos = None
 
@@ -1473,6 +1491,57 @@ class Backtester:
                         confluence_score = eval_res["total_score"]
                         thinking_data = eval_res
 
+                    # Consult Reinforcement Learning Memory Agent (Vetoes recurring loss patterns)
+                    rl_state_vec = None
+                    rl_state_key = None
+                    if rl_agent is not None:
+                        try:
+                            bar_hour = pd.to_datetime(bar_time).hour
+                        except Exception:
+                            bar_hour = 12
+
+                        bar_atr = float(prev_row.get("atr14", 15.0 * self.pip_size))
+                        vol_rat = float(prev_row.get("vol_ratio", 1.0))
+                        ema_dist = (open_price - float(prev_row.get("close", open_price))) / self.pip_size
+                        d1_slp = float(prev_row.get("d1_slope", 0.0))
+
+                        rl_res = rl_agent.evaluate_trade(
+                            direction=cand_type,
+                            hour=bar_hour,
+                            vol_ratio=vol_rat,
+                            spread_pips=self.spread_pips,
+                            ema_dist_pips=ema_dist,
+                            d1_slope=d1_slp,
+                            confluence_score=confluence_score
+                        )
+
+                        if not rl_res["approved"]:
+                            rl_vetoed_count += 1
+                            rej_reasons = rl_res["veto_reasons"]
+                            primary_veto = rej_reasons[0] if rej_reasons else "RL Unfavorable Expectation"
+                            rejected_trades.append({
+                                "id": len(rejected_trades) + 1,
+                                "time": bar_time,
+                                "type": cand_type,
+                                "price": round(open_price, 5),
+                                "score": confluence_score,
+                                "win_prob": thinking_data.get("win_probability", 0.5),
+                                "ev": rl_res["q_value"],
+                                "verdict": "RL MEMORY VETO",
+                                "will_be_profitable": f"NO - RL Failure Memory Veto ({primary_veto})",
+                                "reasons_why_execute": thinking_data.get("reasons_why_execute", []),
+                                "rejection_reasons": rej_reasons,
+                                "risks_weighed": rl_res["memory_learnings"],
+                                "thesis": primary_veto,
+                                "telemetry": thinking_data.get("telemetry", {})
+                            })
+                            continue
+
+                        rl_state_vec = rl_res["state_vector"]
+                        rl_state_key = rl_res["state_key"]
+                        thinking_data["rl_q_value"] = rl_res["q_value"]
+                        thinking_data["rl_memory_learnings"] = rl_res["memory_learnings"]
+
                     # Execute Approved Trade
                     if sig == 1:  # BUY
                         risk = (open_price - dyn_sl_val) if dyn_sl_val > 0 else (fixed_sl_dist if fixed_sl_dist > 0 else 20.0 * self.pip_size)
@@ -1499,6 +1568,8 @@ class Backtester:
                             "risk_dist": risk,
                             "be_active": False,
                             "allow_be_trailing": bool(prev_row.get("allow_be", True)),
+                            "rl_state_vec": rl_state_vec,
+                            "rl_state_key": rl_state_key,
                             "score": confluence_score,
                             "thesis": trade_thesis,
                             "thinking": thinking_data
@@ -1528,6 +1599,8 @@ class Backtester:
                             "risk_dist": risk,
                             "be_active": False,
                             "allow_be_trailing": bool(prev_row.get("allow_be", True)),
+                            "rl_state_vec": rl_state_vec,
+                            "rl_state_key": rl_state_key,
                             "score": confluence_score,
                             "thesis": trade_thesis,
                             "thinking": thinking_data
@@ -1583,6 +1656,9 @@ class Backtester:
         avg_win = (total_profit / win_count) if win_count > 0 else 0.0
         avg_loss = (total_loss / loss_count) if loss_count > 0 else 0.0
 
+        if rl_agent is not None:
+            rl_agent.save_memory()
+
         return {
             "initial_capital": self.initial_capital,
             "final_balance": round(balance, 2),
@@ -1592,6 +1668,7 @@ class Backtester:
             "winning_trades": win_count,
             "losing_trades": loss_count,
             "filtered_count": len(rejected_trades),
+            "rl_vetoed_count": rl_vetoed_count,
             "rejected_trades": rejected_trades,
             "win_rate": round(win_rate, 2),
             "profit_factor": round(profit_factor, 2),

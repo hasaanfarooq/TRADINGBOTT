@@ -392,6 +392,18 @@ class BacktestingTab(tk.Frame):
             )
             chk_reasoning.pack(anchor="w")
 
+            self.var_use_rl = tk.BooleanVar(value=True)
+            chk_rl = tk.Checkbutton(
+                self.f_strat_params,
+                text="🧠 Enable RL Failure Memory (Learns from Failed Trades)",
+                variable=self.var_use_rl,
+                font=(FONT_FAMILY, 8, "bold"),
+                fg="#7C3AED",
+                bg="#F9FAFB",
+                activebackground="#F9FAFB"
+            )
+            chk_rl.pack(anchor="w", pady=(1, 0))
+
             row_score = tk.Frame(self.f_strat_params, bg="#F9FAFB")
             row_score.pack(fill="x", pady=(2, 0))
             tk.Label(row_score, text="Min Confluence Score:", font=(FONT_FAMILY, 8), fg="#4B5563", bg="#F9FAFB").pack(side="left")
@@ -442,6 +454,18 @@ class BacktestingTab(tk.Frame):
                 activebackground="#F9FAFB"
             )
             chk_reasoning.pack(anchor="w")
+
+            self.var_use_rl = tk.BooleanVar(value=True)
+            chk_rl = tk.Checkbutton(
+                self.f_strat_params,
+                text="🧠 Enable RL Failure Memory (Learns from Failed Trades)",
+                variable=self.var_use_rl,
+                font=(FONT_FAMILY, 8, "bold"),
+                fg="#7C3AED",
+                bg="#F9FAFB",
+                activebackground="#F9FAFB"
+            )
+            chk_rl.pack(anchor="w", pady=(1, 0))
 
             row_score = tk.Frame(self.f_strat_params, bg="#F9FAFB")
             row_score.pack(fill="x", pady=(2, 0))
@@ -928,6 +952,9 @@ class BacktestingTab(tk.Frame):
         if verdict == "APPROVED" and not is_rejected:
             self.lbl_insp_verdict.config(text="[ APPROVED: A++ SETUP ]", bg="#DCFCE7", fg="#15803D")
             self.f_profit_banner.config(highlightbackground="#86EFAC")
+        elif "RL" in str(verdict):
+            self.lbl_insp_verdict.config(text="[ 🧠 RL MEMORY VETO ]", bg="#EDE9FE", fg="#6D28D9")
+            self.f_profit_banner.config(highlightbackground="#C4B5FD")
         else:
             self.lbl_insp_verdict.config(text="[ REJECTED: DISQUALIFIED ]", bg="#FEE2E2", fg="#B91C1C")
             self.f_profit_banner.config(highlightbackground="#FCA5A5")
@@ -1147,6 +1174,7 @@ class BacktestingTab(tk.Frame):
             params["symbol"] = symbol
             params["htf_name"] = htf_choice
             params["use_reasoning"] = getattr(self, "var_use_reasoning", tk.BooleanVar(value=True)).get()
+            params["use_rl"] = getattr(self, "var_use_rl", tk.BooleanVar(value=True)).get()
             params["min_confluence_score"] = int(getattr(self, "combo_min_score", ttk.Combobox()).get() or "60")
 
         elif strategy_name == "Apex Institutional Matrix (XAUUSD / EURUSD)":
@@ -1166,6 +1194,7 @@ class BacktestingTab(tk.Frame):
             params["symbol"] = symbol
             params["htf_name"] = htf_choice
             params["use_reasoning"] = getattr(self, "var_use_reasoning", tk.BooleanVar(value=True)).get()
+            params["use_rl"] = getattr(self, "var_use_rl", tk.BooleanVar(value=True)).get()
             params["min_confluence_score"] = int(getattr(self, "combo_min_score", ttk.Combobox()).get() or "60")
 
         elif strategy_name == "CRT Range + CISD/FVG (A++ Institutional)":
