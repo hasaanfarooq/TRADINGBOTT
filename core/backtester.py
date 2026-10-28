@@ -500,7 +500,8 @@ class Backtester:
         daily_loss_cap = float(self.params.get("daily_loss_cap", 100.0))
 
         # Autonomous ML Reasoning Engine
-        reasoning_engine = TradeReasoningEngine(min_confluence_score=65, min_ml_probability=0.75)
+        min_ml_prob = float(self.params.get("min_ml_probability", 0.75))
+        reasoning_engine = TradeReasoningEngine(min_confluence_score=65, min_ml_probability=min_ml_prob)
         rejected_trades: List[Dict[str, Any]] = []
 
         # Dynamic or fixed lot sizing
@@ -1086,7 +1087,7 @@ class Backtester:
                     # Execute Approved Trade
                     if sig == 1:  # BUY
                         risk = (open_price - dyn_sl_val) if dyn_sl_val > 0 else (fixed_sl_dist if fixed_sl_dist > 0 else 20.0 * self.pip_size)
-                        if risk > 0 and dyn_sl_val > 0:
+                        if dyn_tp_val <= 0 and risk > 0:
                             dyn_tp_val = round(open_price + (2.0 * risk), 5)
 
                         if self.lot_size is None or self.lot_size <= 0:
@@ -1114,7 +1115,7 @@ class Backtester:
                         }
                     elif sig == -1:  # SELL
                         risk = (dyn_sl_val - open_price) if dyn_sl_val > 0 else (fixed_sl_dist if fixed_sl_dist > 0 else 20.0 * self.pip_size)
-                        if risk > 0 and dyn_sl_val > 0:
+                        if dyn_tp_val <= 0 and risk > 0:
                             dyn_tp_val = round(open_price - (2.0 * risk), 5)
 
                         if self.lot_size is None or self.lot_size <= 0:
