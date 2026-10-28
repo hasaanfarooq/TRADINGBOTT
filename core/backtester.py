@@ -453,7 +453,7 @@ class Backtester:
             else:
                 df_ticks["time_dt"] = pd.to_datetime(df_ticks["time"])
 
-        # 1-Minute 50 EMA Trend Filter
+        # 1-Minute 50 EMA & ATR Volatility Ratio Filters
         df_m1 = self.params.get("df_m1", None)
         if df_m1 is not None and len(df_m1) > 10:
             m1 = df_m1.copy()
@@ -463,14 +463,25 @@ class Backtester:
                 else:
                     m1["time_dt"] = pd.to_datetime(m1["time"])
             m1["ema50"] = m1["close"].ewm(span=50, adjust=False).mean()
+
+            # ATR Volatility Ratio
+            hl = m1["high"] - m1["low"]
+            hc = (m1["high"] - m1["close"].shift(1)).abs()
+            lc = (m1["low"] - m1["close"].shift(1)).abs()
+            m1["atr14"] = pd.concat([hl, hc, lc], axis=1).max(axis=1).rolling(14).mean().bfill()
+            m1["atr50"] = m1["atr14"].rolling(50).mean().bfill()
+            m1["atr_ratio"] = (m1["atr14"] / m1["atr50"]).fillna(1.0)
+
             df_ticks = pd.merge_asof(
                 df_ticks.sort_values("time_dt"),
-                m1[["time_dt", "ema50"]].sort_values("time_dt"),
+                m1[["time_dt", "ema50", "atr_ratio"]].sort_values("time_dt"),
                 on="time_dt",
                 direction="backward"
             )
+            df_ticks["atr_ratio"] = df_ticks["atr_ratio"].fillna(1.0)
         else:
             df_ticks["ema50"] = df_ticks["bid"].ewm(span=500, adjust=False).mean()
+            df_ticks["atr_ratio"] = 1.0
 
         # Strategy Parameters
         target_profit_usd = float(self.params.get("target_profit_usd", 0.01))
@@ -487,6 +498,10 @@ class Backtester:
         basket_pause_sec = int(self.params.get("basket_pause_sec", 300))
         max_consec_losses = int(self.params.get("max_consec_losses", 5))
         daily_loss_cap = float(self.params.get("daily_loss_cap", 100.0))
+
+        # Autonomous ML Reasoning Engine
+        reasoning_engine = TradeReasoningEngine(min_confluence_score=65, min_ml_probability=0.75)
+        rejected_trades: List[Dict[str, Any]] = []
 
         # Dynamic or fixed lot sizing
         if self.lot_size and self.lot_size > 0:
@@ -513,16 +528,23 @@ class Backtester:
         asks = df_ticks["ask"].values
         time_mscs = df_ticks["time_msc"].values
         ema50s = df_ticks["ema50"].values
+        atr_ratios = df_ticks["atr_ratio"].values
         time_dts = df_ticks["time_dt"]
         hours = time_dts.dt.hour.values
         days = time_dts.dt.day.values
 
+        all_mids = (bids + asks) * 0.5
+
+        # Rolling median spread
+        spread_arr = (asks - bids) / self.pip_size
+        rolling_spread_median = pd.Series(spread_arr).rolling(200, min_periods=1).median().bfill().values
+
         n = len(df_ticks)
-        for i in range(burst_ticks, n):
+        for i in range(burst_ticks + 10, n):
             t_msc = time_mscs[i]
             bid = bids[i]
             ask = asks[i]
-            spread_pips = (ask - bid) / self.pip_size
+            spread_pips = spread_arr[i]
             hr = hours[i]
             d = days[i]
             ema = ema50s[i]
@@ -577,6 +599,7 @@ class Backtester:
                         if dd_p > max_drawdown_pct:
                             max_drawdown_pct = dd_p
 
+                        p_thinking = p.get("thinking", {})
                         trades.append({
                             "id": len(trades) + 1,
                             "type": p_type,
@@ -590,8 +613,9 @@ class Backtester:
                             "pnl_pct": round((pnl / self.initial_capital) * 100, 2),
                             "balance": round(balance, 2),
                             "reason": exit_reason,
-                            "score": 90,
-                            "thesis": "Tick Burst Momentum"
+                            "score": p_thinking.get("total_score", 90),
+                            "thesis": p_thinking.get("thesis", "Tick Burst Momentum"),
+                            "thinking": p_thinking
                         })
                     else:
                         still_open.append(p)
@@ -618,6 +642,7 @@ class Backtester:
                         if dd_p > max_drawdown_pct:
                             max_drawdown_pct = dd_p
 
+                        p_thinking = p.get("thinking", {})
                         trades.append({
                             "id": len(trades) + 1,
                             "type": p_type,
@@ -631,8 +656,9 @@ class Backtester:
                             "pnl_pct": round((pnl / self.initial_capital) * 100, 2),
                             "balance": round(balance, 2),
                             "reason": "Basket Stop Loss",
-                            "score": 90,
-                            "thesis": "Circuit Breaker Protection"
+                            "score": p_thinking.get("total_score", 90),
+                            "thesis": "Circuit Breaker Protection",
+                            "thinking": p_thinking
                         })
                     positions = []
                     basket_pause_until_msc = t_msc + (basket_pause_sec * 1000)
@@ -674,8 +700,56 @@ class Backtester:
             if slots <= 0:
                 continue
 
-            # BUY Entry
+            # BUY Candidate Evaluation with Machine Learning Thinking
             if (up_ticks / total_active) >= burst_agreement and net_disp_pips >= min_burst_pips and ask > ema:
+                time_elapsed_ms = t_msc - time_mscs[i - burst_ticks]
+                velocity = (abs(net_disp_pips) / (time_elapsed_ms / 1000.0)) if time_elapsed_ms > 0 else 0.0
+                med_spread = rolling_spread_median[i] if i < len(rolling_spread_median) else 1.0
+                ema_dist = (mids[-1] - ema) / self.pip_size
+                accel = (all_mids[i] - 2 * all_mids[i - 5] + all_mids[i - 10]) / self.pip_size
+                vol_rat = atr_ratios[i] if i < len(atr_ratios) else 1.0
+                streak = 0
+                for d_val in reversed(deltas):
+                    if d_val > 0:
+                        streak += 1
+                    else:
+                        break
+
+                eval_res = reasoning_engine.evaluate_tick_scalper(
+                    direction="BUY",
+                    disp_pips=net_disp_pips,
+                    agreement=up_ticks / total_active,
+                    velocity=velocity,
+                    spread_pips=spread_pips,
+                    median_spread=med_spread,
+                    ema_dist_pips=ema_dist,
+                    acceleration=accel,
+                    vol_ratio=vol_rat,
+                    hour=hr,
+                    streak=streak,
+                    target_profit_usd=target_profit_usd,
+                    stop_loss_usd=stop_loss_usd
+                )
+
+                if not eval_res["approved"]:
+                    rejected_trades.append({
+                        "id": len(rejected_trades) + 1,
+                        "time": str(time_dts.iloc[i]),
+                        "type": "BUY",
+                        "price": round(ask, 5),
+                        "score": eval_res["total_score"],
+                        "win_prob": eval_res["win_probability"],
+                        "ev": eval_res["expected_value_r"],
+                        "verdict": eval_res["verdict"],
+                        "will_be_profitable": eval_res["will_be_profitable"],
+                        "reasons_why_execute": eval_res["reasons_why_execute"],
+                        "rejection_reasons": eval_res["rejection_reasons"],
+                        "risks_weighed": eval_res["risks_weighed"],
+                        "thesis": eval_res["thesis"],
+                        "telemetry": eval_res["telemetry"]
+                    })
+                    continue
+
                 for _ in range(slots):
                     positions.append({
                         "id": len(trades) + len(positions) + 1,
@@ -683,12 +757,61 @@ class Backtester:
                         "lot_size": pos_lot,
                         "entry_price": ask,
                         "entry_time_str": str(time_dts.iloc[i]),
-                        "entry_time_msc": t_msc
+                        "entry_time_msc": t_msc,
+                        "thinking": eval_res
                     })
                 last_entry_time_msc = t_msc
 
-            # SELL Entry
+            # SELL Candidate Evaluation with Machine Learning Thinking
             elif (down_ticks / total_active) >= burst_agreement and net_disp_pips <= -min_burst_pips and bid < ema:
+                time_elapsed_ms = t_msc - time_mscs[i - burst_ticks]
+                velocity = (abs(net_disp_pips) / (time_elapsed_ms / 1000.0)) if time_elapsed_ms > 0 else 0.0
+                med_spread = rolling_spread_median[i] if i < len(rolling_spread_median) else 1.0
+                ema_dist = (ema - mids[-1]) / self.pip_size
+                accel = (all_mids[i] - 2 * all_mids[i - 5] + all_mids[i - 10]) / self.pip_size
+                vol_rat = atr_ratios[i] if i < len(atr_ratios) else 1.0
+                streak = 0
+                for d_val in reversed(deltas):
+                    if d_val < 0:
+                        streak += 1
+                    else:
+                        break
+
+                eval_res = reasoning_engine.evaluate_tick_scalper(
+                    direction="SELL",
+                    disp_pips=net_disp_pips,
+                    agreement=down_ticks / total_active,
+                    velocity=velocity,
+                    spread_pips=spread_pips,
+                    median_spread=med_spread,
+                    ema_dist_pips=ema_dist,
+                    acceleration=accel,
+                    vol_ratio=vol_rat,
+                    hour=hr,
+                    streak=streak,
+                    target_profit_usd=target_profit_usd,
+                    stop_loss_usd=stop_loss_usd
+                )
+
+                if not eval_res["approved"]:
+                    rejected_trades.append({
+                        "id": len(rejected_trades) + 1,
+                        "time": str(time_dts.iloc[i]),
+                        "type": "SELL",
+                        "price": round(bid, 5),
+                        "score": eval_res["total_score"],
+                        "win_prob": eval_res["win_probability"],
+                        "ev": eval_res["expected_value_r"],
+                        "verdict": eval_res["verdict"],
+                        "will_be_profitable": eval_res["will_be_profitable"],
+                        "reasons_why_execute": eval_res["reasons_why_execute"],
+                        "rejection_reasons": eval_res["rejection_reasons"],
+                        "risks_weighed": eval_res["risks_weighed"],
+                        "thesis": eval_res["thesis"],
+                        "telemetry": eval_res["telemetry"]
+                    })
+                    continue
+
                 for _ in range(slots):
                     positions.append({
                         "id": len(trades) + len(positions) + 1,
@@ -696,7 +819,8 @@ class Backtester:
                         "lot_size": pos_lot,
                         "entry_price": bid,
                         "entry_time_str": str(time_dts.iloc[i]),
-                        "entry_time_msc": t_msc
+                        "entry_time_msc": t_msc,
+                        "thinking": eval_res
                     })
                 last_entry_time_msc = t_msc
 
@@ -708,6 +832,7 @@ class Backtester:
             diff = (exit_price - entry_p) if p_type == "BUY" else (entry_p - exit_price)
             pnl = diff * p["lot_size"] * self.contract_size
             balance += pnl
+            p_thinking = p.get("thinking", {})
             trades.append({
                 "id": len(trades) + 1,
                 "type": p_type,
@@ -721,8 +846,9 @@ class Backtester:
                 "pnl_pct": round((pnl / self.initial_capital) * 100, 2),
                 "balance": round(balance, 2),
                 "reason": "End of Data",
-                "score": 90,
-                "thesis": "Tick Burst"
+                "score": p_thinking.get("total_score", 90),
+                "thesis": "Tick Burst",
+                "thinking": p_thinking
             })
 
         # Calculate final metrics
@@ -750,14 +876,13 @@ class Backtester:
             "total_trades": total_trades,
             "winning_trades": win_count,
             "losing_trades": loss_count,
-            "filtered_count": 0,
-            "rejected_trades": [],
+            "filtered_count": len(rejected_trades),
+            "rejected_trades": rejected_trades,
             "win_rate": round(win_rate, 2),
             "profit_factor": round(profit_factor, 2),
             "max_drawdown_dollar": round(max_drawdown_dollar, 2),
             "max_drawdown_pct": round(max_drawdown_pct, 2),
             "avg_win": round(avg_win, 2),
-            "avg_loss": round(avg_loss, 2),
             "trades": trades
         }
 
@@ -908,7 +1033,8 @@ class Backtester:
                         "balance": round(balance, 2),
                         "reason": exit_reason,
                         "score": open_pos.get("score", 100),
-                        "thesis": open_pos.get("thesis", "Approved")
+                        "thesis": open_pos.get("thesis", "Approved"),
+                        "thinking": open_pos.get("thinking", {})
                     }
                     trades.append(trade_record)
                     open_pos = None
@@ -923,6 +1049,7 @@ class Backtester:
                     cand_type = "BUY" if sig == 1 else "SELL"
                     trade_thesis = "Approved"
                     confluence_score = 100
+                    thinking_data = {}
 
                     # Consult Quantitative Trade Reasoning Engine
                     if reasoning_engine is not None and dfs is not None:
@@ -936,14 +1063,25 @@ class Backtester:
                         if not eval_res["approved"]:
                             # Trade Reasoning Engine filtered out this low-quality setup
                             rejected_trades.append({
+                                "id": len(rejected_trades) + 1,
                                 "time": bar_time,
                                 "type": cand_type,
+                                "price": round(open_price, 5),
                                 "score": eval_res["total_score"],
-                                "thesis": eval_res["thesis"]
+                                "win_prob": eval_res.get("win_probability", 0.5),
+                                "ev": eval_res.get("expected_value_r", 0.0),
+                                "verdict": eval_res.get("verdict", "REJECTED"),
+                                "will_be_profitable": eval_res.get("will_be_profitable", "NO"),
+                                "reasons_why_execute": eval_res.get("reasons_why_execute", []),
+                                "rejection_reasons": eval_res.get("rejection_reasons", []),
+                                "risks_weighed": eval_res.get("risks_weighed", []),
+                                "thesis": eval_res["thesis"],
+                                "telemetry": eval_res.get("telemetry", {})
                             })
                             continue
                         trade_thesis = eval_res["thesis"]
                         confluence_score = eval_res["total_score"]
+                        thinking_data = eval_res
 
                     # Execute Approved Trade
                     if sig == 1:  # BUY
@@ -971,7 +1109,8 @@ class Backtester:
                             "risk_dist": risk,
                             "be_active": False,
                             "score": confluence_score,
-                            "thesis": trade_thesis
+                            "thesis": trade_thesis,
+                            "thinking": thinking_data
                         }
                     elif sig == -1:  # SELL
                         risk = (dyn_sl_val - open_price) if dyn_sl_val > 0 else (fixed_sl_dist if fixed_sl_dist > 0 else 20.0 * self.pip_size)
@@ -998,7 +1137,8 @@ class Backtester:
                             "risk_dist": risk,
                             "be_active": False,
                             "score": confluence_score,
-                            "thesis": trade_thesis
+                            "thesis": trade_thesis,
+                            "thinking": thinking_data
                         }
 
         # Close open trade on last bar if any
@@ -1029,7 +1169,8 @@ class Backtester:
                 "balance": round(balance, 2),
                 "reason": "End of Data",
                 "score": open_pos.get("score", 100),
-                "thesis": open_pos.get("thesis", "Approved")
+                "thesis": open_pos.get("thesis", "Approved"),
+                "thinking": open_pos.get("thinking", {})
             }
             trades.append(trade_record)
 

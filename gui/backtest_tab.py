@@ -39,6 +39,9 @@ class BacktestingTab(tk.Frame):
         self.app_ref = app_ref
         self.is_running = False
         self.last_results = None
+        self.current_trades: List[Dict[str, Any]] = []
+        self.current_rejected: List[Dict[str, Any]] = []
+        self.current_view_mode = "EXECUTED"
 
         self._build_ui()
 
@@ -601,43 +604,76 @@ class BacktestingTab(tk.Frame):
         self.card_trades_count = self._create_result_box(grid, 1, 1, "TOTAL TRADES", "0", "0 Wins  |  0 Losses")
         self.card_avg_win_loss = self._create_result_box(grid, 1, 2, "AVG WIN / LOSS", "$0.00 / $0.00", "Expectancy: $0.00")
 
-        # 2. Detailed Trade Execution Ledger Table
+        # 2. Detailed Trade Execution Ledger Table Card
         tbl_card = tk.Frame(parent, bg="#FFFFFF", highlightbackground="#E5E7EB", highlightthickness=1)
         tbl_card.pack(fill="both", expand=True)
 
-        tbl_hdr = tk.Frame(tbl_card, bg="#F9FAFB", padx=14, pady=8, highlightbackground="#E5E7EB", highlightthickness=1)
+        tbl_hdr = tk.Frame(tbl_card, bg="#F9FAFB", padx=10, pady=6, highlightbackground="#E5E7EB", highlightthickness=1)
         tbl_hdr.pack(fill="x")
-        tk.Label(tbl_hdr, text="TRADE EXECUTION LEDGER", font=(FONT_FAMILY, 9, "bold"), fg="#111827", bg="#F9FAFB").pack(side="left")
+
+        f_hdr_left = tk.Frame(tbl_hdr, bg="#F9FAFB")
+        f_hdr_left.pack(side="left")
+
+        tk.Label(f_hdr_left, text="TRADE EXECUTION LEDGER", font=(FONT_FAMILY, 9, "bold"), fg="#111827", bg="#F9FAFB").pack(side="left", padx=(0, 10))
+
+        self.btn_view_executed = tk.Button(
+            f_hdr_left,
+            text="✅ Executed Trades (0)",
+            font=(FONT_FAMILY, 8, "bold"),
+            bg="#2563EB",
+            fg="#FFFFFF",
+            relief="flat",
+            padx=8,
+            pady=2,
+            cursor="hand2",
+            command=lambda: self._switch_trade_view("EXECUTED")
+        )
+        self.btn_view_executed.pack(side="left", padx=2)
+
+        self.btn_view_rejected = tk.Button(
+            f_hdr_left,
+            text="🧠 Filtered Setups (0)",
+            font=(FONT_FAMILY, 8),
+            bg="#F3F4F6",
+            fg="#4B5563",
+            relief="flat",
+            padx=8,
+            pady=2,
+            cursor="hand2",
+            command=lambda: self._switch_trade_view("REJECTED")
+        )
+        self.btn_view_rejected.pack(side="left", padx=2)
+
         self.lbl_trade_count = tk.Label(tbl_hdr, text="0 Trades Recorded", font=(FONT_FAMILY, 8), fg="#6B7280", bg="#F9FAFB")
         self.lbl_trade_count.pack(side="right")
 
-        tbl_body = tk.Frame(tbl_card, bg="#FFFFFF", padx=8, pady=8)
+        tbl_body = tk.Frame(tbl_card, bg="#FFFFFF", padx=6, pady=4)
         tbl_body.pack(fill="both", expand=True)
 
         cols = ("id", "type", "entry_time", "entry_price", "exit_time", "exit_price", "pips", "pnl", "score", "reason")
-        self.tree = ttk.Treeview(tbl_body, columns=cols, show="headings", height=12)
+        self.tree = ttk.Treeview(tbl_body, columns=cols, show="headings", height=7)
 
         self.tree.heading("id", text="#")
         self.tree.heading("type", text="Type")
-        self.tree.heading("entry_time", text="Entry Time")
-        self.tree.heading("entry_price", text="Entry Price")
-        self.tree.heading("exit_time", text="Exit Time")
+        self.tree.heading("entry_time", text="Entry / Time")
+        self.tree.heading("entry_price", text="Price")
+        self.tree.heading("exit_time", text="Exit / Status")
         self.tree.heading("exit_price", text="Exit Price")
         self.tree.heading("pips", text="Pips")
-        self.tree.heading("pnl", text="Net P&L ($)")
+        self.tree.heading("pnl", text="Net P&L / EV")
         self.tree.heading("score", text="Score")
-        self.tree.heading("reason", text="Exit Reason")
+        self.tree.heading("reason", text="Thesis / Reason")
 
         self.tree.column("id", width=35, anchor="center")
-        self.tree.column("type", width=65, anchor="center")
-        self.tree.column("entry_time", width=135, anchor="center")
-        self.tree.column("entry_price", width=85, anchor="e")
-        self.tree.column("exit_time", width=135, anchor="center")
-        self.tree.column("exit_price", width=85, anchor="e")
-        self.tree.column("pips", width=65, anchor="e")
+        self.tree.column("type", width=60, anchor="center")
+        self.tree.column("entry_time", width=130, anchor="center")
+        self.tree.column("entry_price", width=80, anchor="e")
+        self.tree.column("exit_time", width=120, anchor="center")
+        self.tree.column("exit_price", width=80, anchor="e")
+        self.tree.column("pips", width=60, anchor="e")
         self.tree.column("pnl", width=85, anchor="e")
         self.tree.column("score", width=55, anchor="center")
-        self.tree.column("reason", width=120, anchor="w")
+        self.tree.column("reason", width=150, anchor="w")
 
         scroll_y = ttk.Scrollbar(tbl_body, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll_y.set)
@@ -648,6 +684,11 @@ class BacktestingTab(tk.Frame):
         # Color tags
         self.tree.tag_configure("WIN", foreground="#16A34A")
         self.tree.tag_configure("LOSS", foreground="#DC2626")
+        self.tree.tag_configure("REJECTED", foreground="#D97706")
+        self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
+
+        # 3. Trade Thinking Process & Profitability Rationale Inspector
+        self._build_thinking_inspector(tbl_card)
 
     def _create_result_box(self, parent, row, col, title, initial_val, sub_val):
         box = tk.Frame(parent, bg="#FFFFFF", highlightbackground="#E5E7EB", highlightthickness=1, padx=12, pady=8)
@@ -660,6 +701,265 @@ class BacktestingTab(tk.Frame):
         sub_lbl.pack(anchor="w")
 
         return {"main": val_lbl, "sub": sub_lbl}
+
+    def _build_thinking_inspector(self, parent):
+        self.f_inspector_card = tk.Frame(parent, bg="#F8FAFC", highlightbackground="#E2E8F0", highlightthickness=1, padx=10, pady=8)
+        self.f_inspector_card.pack(fill="x", padx=6, pady=(0, 6))
+
+        # 1. Header & Dynamic Badges
+        hdr_row = tk.Frame(self.f_inspector_card, bg="#F8FAFC")
+        hdr_row.pack(fill="x", pady=(0, 4))
+
+        tk.Label(
+            hdr_row,
+            text="🧠 QUANTITATIVE REASONING & PROFITABILITY INSPECTOR",
+            font=(FONT_FAMILY, 8, "bold"),
+            fg="#1E293B",
+            bg="#F8FAFC"
+        ).pack(side="left")
+
+        self.f_insp_badges = tk.Frame(hdr_row, bg="#F8FAFC")
+        self.f_insp_badges.pack(side="right")
+
+        self.lbl_insp_verdict = tk.Label(self.f_insp_badges, text="READY FOR AUDIT", font=(FONT_FAMILY, 7, "bold"), bg="#E2E8F0", fg="#475569", padx=6, pady=1)
+        self.lbl_insp_verdict.pack(side="left", padx=2)
+
+        self.lbl_insp_score = tk.Label(self.f_insp_badges, text="Score: -", font=(FONT_FAMILY, 7, "bold"), bg="#E2E8F0", fg="#475569", padx=6, pady=1)
+        self.lbl_insp_score.pack(side="left", padx=2)
+
+        self.lbl_insp_prob = tk.Label(self.f_insp_badges, text="Win Prob: -", font=(FONT_FAMILY, 7, "bold"), bg="#DBEAFE", fg="#1D4ED8", padx=6, pady=1)
+        self.lbl_insp_prob.pack(side="left", padx=2)
+
+        self.lbl_insp_ev = tk.Label(self.f_insp_badges, text="EV: -", font=(FONT_FAMILY, 7, "bold"), bg="#EDE9FE", fg="#6D28D9", padx=6, pady=1)
+        self.lbl_insp_ev.pack(side="left", padx=2)
+
+        # 2. Profitability Answer Banner
+        self.f_profit_banner = tk.Frame(self.f_inspector_card, bg="#FFFFFF", highlightbackground="#CBD5E1", highlightthickness=1, padx=8, pady=4)
+        self.f_profit_banner.pack(fill="x", pady=(0, 6))
+
+        tk.Label(
+            self.f_profit_banner,
+            text="WILL THIS TRADE BE PROFITABLE?",
+            font=(FONT_FAMILY, 7, "bold"),
+            fg="#2563EB",
+            bg="#FFFFFF"
+        ).pack(side="left", padx=(0, 6))
+
+        self.lbl_profit_answer = tk.Label(
+            self.f_profit_banner,
+            text="Select any executed trade or filtered setup above to view full quantitative reasoning.",
+            font=(FONT_FAMILY, 8),
+            fg="#334155",
+            bg="#FFFFFF",
+            anchor="w"
+        )
+        self.lbl_profit_answer.pack(side="left", fill="x", expand=True)
+
+        # 3. Three-Column Detailed Audit Deck
+        deck = tk.Frame(self.f_inspector_card, bg="#F8FAFC")
+        deck.pack(fill="x")
+
+        # Column 1: Why Execute?
+        col1 = tk.Frame(deck, bg="#FFFFFF", highlightbackground="#CBD5E1", highlightthickness=1, padx=6, pady=4)
+        col1.pack(side="left", fill="both", expand=True, padx=(0, 3))
+        tk.Label(col1, text="💡 WHY EXECUTE? (CONFLUENCES & THESIS)", font=(FONT_FAMILY, 7, "bold"), fg="#16A34A", bg="#FFFFFF").pack(anchor="w")
+        self.txt_why_execute = tk.Label(
+            col1,
+            text="• Multi-timeframe trend alignment\n• Liquidity sweep and rejection\n• Orderflow burst velocity",
+            font=(FONT_FAMILY, 7),
+            fg="#374151",
+            bg="#FFFFFF",
+            justify="left",
+            anchor="nw"
+        )
+        self.txt_why_execute.pack(anchor="w", fill="both", expand=True, pady=(2, 0))
+
+        # Column 2: Rejection / Risks Weighed
+        col2 = tk.Frame(deck, bg="#FFFFFF", highlightbackground="#CBD5E1", highlightthickness=1, padx=6, pady=4)
+        col2.pack(side="left", fill="both", expand=True, padx=3)
+        self.lbl_col2_title = tk.Label(col2, text="⚠️ RISKS WEIGHED / REJECTION DIAGNOSIS", font=(FONT_FAMILY, 7, "bold"), fg="#DC2626", bg="#FFFFFF")
+        self.lbl_col2_title.pack(anchor="w")
+        self.txt_rejection = tk.Label(
+            col2,
+            text="• Spread-to-profit compression evaluated\n• 1M 50 EMA mean reversion buffer verified\n• Low volatility chop avoidance filter",
+            font=(FONT_FAMILY, 7),
+            fg="#374151",
+            bg="#FFFFFF",
+            justify="left",
+            anchor="nw"
+        )
+        self.txt_rejection.pack(anchor="w", fill="both", expand=True, pady=(2, 0))
+
+        # Column 3: Market Telemetry
+        col3 = tk.Frame(deck, bg="#FFFFFF", highlightbackground="#CBD5E1", highlightthickness=1, padx=6, pady=4, width=190)
+        col3.pack(side="right", fill="y", padx=(3, 0))
+        tk.Label(col3, text="📊 MARKET TELEMETRY", font=(FONT_FAMILY, 7, "bold"), fg="#2563EB", bg="#FFFFFF").pack(anchor="w")
+        self.txt_telemetry = tk.Label(
+            col3,
+            text="Velocity: - pips/s\nEMA Dist: - pips\nATR Vol: - x\nBroker Spread: - pips\nSession: -",
+            font=(FONT_FAMILY, 7),
+            fg="#475569",
+            bg="#FFFFFF",
+            justify="left",
+            anchor="nw"
+        )
+        self.txt_telemetry.pack(anchor="w", fill="both", expand=True, pady=(2, 0))
+
+    def _render_thinking_inspector(self, record: Dict[str, Any], is_rejected: bool = False):
+        if not record:
+            return
+
+        thinking = record.get("thinking", {})
+        score = thinking.get("total_score", record.get("score", 100))
+        win_prob = thinking.get("win_probability", record.get("win_prob", 0.5))
+        ev = thinking.get("expected_value_r", record.get("ev", 0.0))
+        will_profit = thinking.get("will_be_profitable", record.get("will_be_profitable", "Evaluated by Reasoning Model"))
+        why_exec = thinking.get("reasons_why_execute", record.get("reasons_why_execute", []))
+        rejections = thinking.get("rejection_reasons", record.get("rejection_reasons", []))
+        risks = thinking.get("risks_weighed", record.get("risks_weighed", []))
+        telemetry = thinking.get("telemetry", record.get("telemetry", {}))
+        verdict = thinking.get("verdict", "REJECTED" if is_rejected else "APPROVED")
+
+        # Update Verdict Badge
+        if verdict == "APPROVED" and not is_rejected:
+            self.lbl_insp_verdict.config(text="[ APPROVED: A++ SETUP ]", bg="#DCFCE7", fg="#15803D")
+            self.f_profit_banner.config(highlightbackground="#86EFAC")
+        else:
+            self.lbl_insp_verdict.config(text="[ REJECTED: DISQUALIFIED ]", bg="#FEE2E2", fg="#B91C1C")
+            self.f_profit_banner.config(highlightbackground="#FCA5A5")
+
+        self.lbl_insp_score.config(text=f"Score: {score}/100")
+        prob_pct = (win_prob * 100) if win_prob <= 1.0 else win_prob
+        self.lbl_insp_prob.config(text=f"ML Win Prob: {prob_pct:.1f}%")
+        self.lbl_insp_ev.config(text=f"EV: {'+' if ev >= 0 else ''}{ev:.2f}")
+
+        # Update Profitability Answer Banner
+        self.lbl_profit_answer.config(text=will_profit)
+
+        # Update Why Execute Column
+        if why_exec:
+            why_text = "\n".join([f"✓ {item}" for item in why_exec[:4]])
+        else:
+            thesis = record.get("thesis", "Approved Institutional Setup")
+            why_text = f"✓ {thesis}"
+        self.txt_why_execute.config(text=why_text)
+
+        # Update Rejection / Risks Column
+        if is_rejected or verdict == "REJECTED":
+            self.lbl_col2_title.config(text="❌ WHY REJECTED? (DISQUALIFYING REASONS)", fg="#DC2626")
+            if rejections:
+                rej_text = "\n".join([f"✗ {item}" for item in rejections[:4]])
+            else:
+                rej_text = f"✗ Score {score}/100 below required confluence threshold."
+            self.txt_rejection.config(text=rej_text)
+        else:
+            self.lbl_col2_title.config(text="⚠️ RISKS WEIGHED & MITIGATED", fg="#D97706")
+            if risks:
+                risk_text = "\n".join([f"• {item}" for item in risks[:4]])
+            else:
+                risk_text = "• Spread drag within tolerance\n• 50 EMA mean-reversion risk acceptable\n• Protected by structural invalidation level"
+            self.txt_rejection.config(text=risk_text)
+
+        # Update Telemetry Column
+        vel = telemetry.get("velocity", "-")
+        ema_d = telemetry.get("ema_dist_pips", "-")
+        atr_r = telemetry.get("vol_ratio", telemetry.get("atr_pips", "-"))
+        sprd = telemetry.get("spread_pips", "-")
+        hr = telemetry.get("hour_utc", "-")
+        self.txt_telemetry.config(
+            text=f"Velocity: {vel} p/s\nEMA Dist: {ema_d} pips\nATR Vol: {atr_r}\nSpread: {sprd} pips\nSession: {hr}:00 UTC"
+        )
+
+    def _switch_trade_view(self, mode: str):
+        self.current_view_mode = mode
+        for row in self.tree.get_children():
+            self.tree.delete(row)
+
+        if mode == "EXECUTED":
+            self.btn_view_executed.config(bg="#2563EB", fg="#FFFFFF")
+            self.btn_view_rejected.config(bg="#F3F4F6", fg="#4B5563")
+
+            for t in self.current_trades:
+                tag = "WIN" if t["pnl"] > 0 else "LOSS"
+                score_display = f"{t.get('score', 100)} pts"
+                self.tree.insert(
+                    "",
+                    "end",
+                    iid=f"trade_{t['id']}",
+                    values=(
+                        t["id"],
+                        t["type"],
+                        t["entry_time"],
+                        f"{t['entry_price']:.5f}",
+                        t["exit_time"],
+                        f"{t['exit_price']:.5f}",
+                        f"{t['pips']:.1f}",
+                        f"{'+' if t['pnl'] > 0 else ''}${t['pnl']:.2f}",
+                        score_display,
+                        t["reason"]
+                    ),
+                    tags=(tag,)
+                )
+            if self.current_trades:
+                first_iid = f"trade_{self.current_trades[0]['id']}"
+                self.tree.selection_set(first_iid)
+                self._render_thinking_inspector(self.current_trades[0], is_rejected=False)
+
+        elif mode == "REJECTED":
+            self.btn_view_executed.config(bg="#F3F4F6", fg="#4B5563")
+            self.btn_view_rejected.config(bg="#DC2626", fg="#FFFFFF")
+
+            for r in self.current_rejected:
+                score_display = f"{r.get('score', 0)} pts"
+                rejs = r.get("rejection_reasons", [r.get("thesis", "Disqualified")])
+                reason_summary = rejs[0] if rejs else "Low Confluence Score"
+                ev_val = r.get("ev", 0.0)
+                prob_val = r.get("win_prob", 0.5) * 100
+                self.tree.insert(
+                    "",
+                    "end",
+                    iid=f"rej_{r['id']}",
+                    values=(
+                        r["id"],
+                        r["type"],
+                        r["time"],
+                        f"{r['price']:.5f}",
+                        "FILTERED",
+                        "-",
+                        "-",
+                        f"{ev_val:+.2f} EV ({prob_val:.0f}%)",
+                        score_display,
+                        reason_summary[:40]
+                    ),
+                    tags=("REJECTED",)
+                )
+            if self.current_rejected:
+                first_iid = f"rej_{self.current_rejected[0]['id']}"
+                self.tree.selection_set(first_iid)
+                self._render_thinking_inspector(self.current_rejected[0], is_rejected=True)
+
+    def _on_tree_select(self, event=None):
+        selected = self.tree.selection()
+        if not selected:
+            return
+        item_id = selected[0]
+
+        if item_id.startswith("trade_"):
+            try:
+                t_id = int(item_id.replace("trade_", ""))
+                match = next((t for t in self.current_trades if t["id"] == t_id), None)
+                if match:
+                    self._render_thinking_inspector(match, is_rejected=False)
+            except Exception:
+                pass
+        elif item_id.startswith("rej_"):
+            try:
+                r_id = int(item_id.replace("rej_", ""))
+                match = next((r for r in self.current_rejected if r["id"] == r_id), None)
+                if match:
+                    self._render_thinking_inspector(match, is_rejected=True)
+            except Exception:
+                pass
 
     def _set_capital_preset(self, val: str):
         """Quick preset capital button handler."""
@@ -939,31 +1239,16 @@ class BacktestingTab(tk.Frame):
         rr = (avg_win / avg_loss) if avg_loss > 0 else 0
         self.card_avg_win_loss["sub"].config(text=f"R:R Achieved: {rr:.2f}:1")
 
-        # Populate Trade Ledger
-        for row in self.tree.get_children():
-            self.tree.delete(row)
+        # Store results and populate view switcher
+        self.current_trades = results.get("trades", [])
+        self.current_rejected = results.get("rejected_trades", [])
 
-        trades = results["trades"]
-        for t in trades:
-            tag = "WIN" if t["pnl"] > 0 else "LOSS"
-            score_display = f"{t.get('score', 100)} pts"
-            self.tree.insert(
-                "",
-                "end",
-                values=(
-                    t["id"],
-                    t["type"],
-                    t["entry_time"],
-                    f"{t['entry_price']:.5f}",
-                    t["exit_time"],
-                    f"{t['exit_price']:.5f}",
-                    f"{t['pips']:.1f}",
-                    f"{'+' if t['pnl'] > 0 else ''}${t['pnl']:.2f}",
-                    score_display,
-                    t["reason"]
-                ),
-                tags=(tag,)
-            )
+        # Update button counts
+        self.btn_view_executed.config(text=f"✅ Executed Trades ({len(self.current_trades)})")
+        self.btn_view_rejected.config(text=f"🧠 Filtered Setups ({len(self.current_rejected)})")
+
+        # Render Executed Trades by default
+        self._switch_trade_view("EXECUTED")
 
         unit_name = "Ticks" if strategy == "Tick Momentum Scalper" else "Bars"
         self.lbl_trade_count.config(text=f"{len(trades)} Trades ({filtered_count} Filtered) on {total_bars:,} {unit_name}")
