@@ -319,6 +319,198 @@ class StrategyEngine:
             df["dyn_sl"] = dyn_sl
             df["dyn_tp"] = dyn_tp
 
+        elif strategy == "Apex Institutional Matrix (XAUUSD / EURUSD)":
+            # Dual-Architecture Strategy designed specifically for Gold and Forex microstructure:
+            # 1. Gold (XAUUSD): Asian Session (00:00-06:00 UTC) Breakout & Retest Expansion with ATR buffer and 1:2.0 Target (No BE choke)
+            # 2. Forex (EURUSD): Institutional Anchor CRT Liquidity Sweep + CISD + FVG with Multi-TF Confirmation and +1R Trailing
+            df_htf = params.get("df_htf", None)
+            df_h4 = params.get("df_h4", None)
+            df_d1 = params.get("df_d1", None)
+            pip_size = float(params.get("pip_size", 0.0001))
+            symbol_name = str(params.get("symbol", "")).upper()
+
+            # ATR14 on execution timeframe
+            hl = df["high"] - df["low"]
+            hc = (df["high"] - df["close"].shift(1)).abs()
+            lc = (df["low"] - df["close"].shift(1)).abs()
+            tr_series = pd.concat([hl, hc, lc], axis=1).max(axis=1)
+            atr14 = tr_series.rolling(window=14).mean().bfill()
+
+            # Macro Narrative (D1 50 EMA)
+            if df_d1 is not None and len(df_d1) > 10:
+                d1 = df_d1.copy()
+                d1["d1_bias"] = np.where(d1["close"] > d1["close"].ewm(span=50, adjust=False).mean(), 1, -1)
+                df = pd.merge_asof(
+                    df.sort_values("time"),
+                    d1[["time", "d1_bias"]].sort_values("time"),
+                    on="time",
+                    direction="backward"
+                ).fillna({"d1_bias": 1})
+            else:
+                df["d1_bias"] = 1
+
+            # Intermediate Trend (H4 50 EMA)
+            if df_h4 is not None and len(df_h4) > 10:
+                h4 = df_h4.copy()
+                h4["h4_bias"] = np.where(h4["close"] > h4["close"].ewm(span=50, adjust=False).mean(), 1, -1)
+                df = pd.merge_asof(
+                    df.sort_values("time"),
+                    h4[["time", "h4_bias"]].sort_values("time"),
+                    on="time",
+                    direction="backward"
+                ).fillna({"h4_bias": 1})
+            else:
+                df["h4_bias"] = 1
+
+            # Micro Structural Bias (H1 20 EMA) & CRT Anchors
+            anchor_df = df_htf if df_htf is not None and len(df_htf) > 10 else params.get("df_h1")
+            if anchor_df is not None and len(anchor_df) > 10:
+                htf = anchor_df.copy()
+                htf["h1_bias"] = np.where(htf["close"] > htf["close"].ewm(span=20, adjust=False).mean(), 1, -1)
+                htf_n = len(htf)
+                crt_highs = [np.nan] * htf_n
+                crt_lows = [np.nan] * htf_n
+                last_ch = np.nan
+                last_cl = np.nan
+
+                for j in range(3, htf_n - 3):
+                    if htf["high"].iloc[j] == htf["high"].iloc[j-3:j+4].max():
+                        last_ch = htf["high"].iloc[j]
+                        last_cl = htf["low"].iloc[j]
+                    if htf["low"].iloc[j] == htf["low"].iloc[j-3:j+4].min():
+                        last_ch = htf["high"].iloc[j]
+                        last_cl = htf["low"].iloc[j]
+                    crt_highs[j+3] = last_ch
+                    crt_lows[j+3] = last_cl
+
+                htf["crt_high"] = crt_highs
+                htf["crt_low"] = crt_lows
+
+                df = pd.merge_asof(
+                    df.sort_values("time"),
+                    htf[["time", "crt_high", "crt_low", "h1_bias"]].sort_values("time"),
+                    on="time",
+                    direction="backward"
+                ).fillna({"h1_bias": 1})
+            else:
+                df["crt_high"] = np.nan
+                df["crt_low"] = np.nan
+                df["h1_bias"] = 1
+
+            median_price = float(df["close"].median()) if len(df) > 0 else 1.0
+            is_gold = ("XAU" in symbol_name) or (median_price > 500) or (pip_size == 0.01)
+
+            # Compute Asian Session Range for Gold
+            if is_gold:
+                df["hour"] = pd.to_datetime(df["time"]).dt.hour
+                df["date"] = pd.to_datetime(df["time"]).dt.date
+                asian_df = df[(df["hour"] >= 0) & (df["hour"] < 6)]
+                asian_range = asian_df.groupby("date").agg(
+                    asian_high=("high", "max"),
+                    asian_low=("low", "min")
+                ).reset_index()
+                df = pd.merge(df, asian_range, on="date", how="left")
+            else:
+                df["asian_high"] = np.nan
+                df["asian_low"] = np.nan
+
+            n = len(df)
+            signals = [0] * n
+            dyn_sl = [0.0] * n
+            dyn_tp = [0.0] * n
+            allow_be = [True] * n
+
+            for i in range(3, n):
+                c = float(df["close"].iloc[i])
+                o = float(df["open"].iloc[i])
+                h = float(df["high"].iloc[i])
+                l = float(df["low"].iloc[i])
+                curr_atr = float(atr14.iloc[i]) if i < len(atr14) else 15.0 * pip_size
+
+                prev_c = float(df["close"].iloc[i-1])
+                prev_o = float(df["open"].iloc[i-1])
+                prev_h = float(df["high"].iloc[i-1])
+                prev_l = float(df["low"].iloc[i-1])
+                bar2_h = float(df["high"].iloc[i-2])
+                bar2_l = float(df["low"].iloc[i-2])
+
+                d1_b = df["d1_bias"].iloc[i]
+                h4_b = df["h4_bias"].iloc[i]
+                h1_b = df["h1_bias"].iloc[i]
+
+                bull_confluence = (1 if d1_b == 1 else 0) + (1 if h4_b == 1 else 0) + (1 if h1_b == 1 else 0)
+                bear_confluence = (1 if d1_b == -1 else 0) + (1 if h4_b == -1 else 0) + (1 if h1_b == -1 else 0)
+
+                if is_gold:
+                    # GOLD ARCHITECTURE: Institutional Session Breakout & Retest Expansion
+                    ah = df["asian_high"].iloc[i]
+                    al = df["asian_low"].iloc[i]
+                    hr = pd.to_datetime(df["time"].iloc[i]).hour
+
+                    if pd.isna(ah) or pd.isna(al) or hr < 7 or hr > 18:
+                        continue
+
+                    # Bullish Expansion: Breaks above Asian High and retests with CISD
+                    if bull_confluence >= 2:
+                        if prev_h >= ah and l <= (ah + 0.3 * curr_atr) and c > ah:
+                            cisd = (c > max(prev_o, prev_c)) and (c > o)
+                            if cisd:
+                                sl_dist = max(c - min(l, prev_l) + (0.6 * curr_atr), 1.4 * curr_atr, 2.50)
+                                signals[i] = 1
+                                dyn_sl[i] = round(c - sl_dist, 2)
+                                dyn_tp[i] = round(c + (2.0 * sl_dist), 2)
+                                allow_be[i] = False  # Keep off to prevent suffocation
+
+                    # Bearish Expansion: Breaks below Asian Low and retests with CISD
+                    if bear_confluence >= 2:
+                        if prev_l <= al and h >= (al - 0.3 * curr_atr) and c < al:
+                            cisd = (c < min(prev_o, prev_c)) and (c < o)
+                            if cisd:
+                                sl_dist = max(max(h, prev_h) - c + (0.6 * curr_atr), 1.4 * curr_atr, 2.50)
+                                signals[i] = -1
+                                dyn_sl[i] = round(c + sl_dist, 2)
+                                dyn_tp[i] = round(c - (2.0 * sl_dist), 2)
+                                allow_be[i] = False
+
+                else:
+                    # FOREX (EURUSD) ARCHITECTURE: Institutional Anchor Liquidity Sweep + CISD/FVG
+                    crt_h = float(df["crt_high"].iloc[i]) if pd.notna(df["crt_high"].iloc[i]) else np.nan
+                    crt_l = float(df["crt_low"].iloc[i]) if pd.notna(df["crt_low"].iloc[i]) else np.nan
+
+                    if np.isnan(crt_h) or np.isnan(crt_l):
+                        continue
+
+                    # Bullish Liquidity Sweep into CISD
+                    if bull_confluence >= 2 and l <= crt_l and c > crt_l:
+                        cisd = (c > max(prev_o, prev_c)) and (c > o)
+                        fvg = (l > bar2_h) or ((c - o) > 1.2 * abs(prev_c - prev_o))
+                        if cisd and fvg and crt_h > c:
+                            risk = max(c - min(l, prev_l) + (2.0 * pip_size), 1.2 * curr_atr, 10.0 * pip_size)
+                            target = crt_h - c
+                            if target >= (1.4 * risk):
+                                signals[i] = 1
+                                dyn_sl[i] = round(c - risk, 5)
+                                dyn_tp[i] = round(crt_h, 5)
+                                allow_be[i] = True
+
+                    # Bearish Liquidity Sweep into CISD
+                    if bear_confluence >= 2 and h >= crt_h and c < crt_h:
+                        cisd = (c < min(prev_o, prev_c)) and (c < o)
+                        fvg = (h < bar2_l) or ((o - c) > 1.2 * abs(prev_c - prev_o))
+                        if cisd and fvg and crt_l < c:
+                            risk = max(max(h, prev_h) - c + (2.0 * pip_size), 1.2 * curr_atr, 10.0 * pip_size)
+                            target = c - crt_l
+                            if target >= (1.4 * risk):
+                                signals[i] = -1
+                                dyn_sl[i] = round(c + risk, 5)
+                                dyn_tp[i] = round(crt_l, 5)
+                                allow_be[i] = True
+
+            df["signal"] = signals
+            df["dyn_sl"] = dyn_sl
+            df["dyn_tp"] = dyn_tp
+            df["allow_be"] = allow_be
+
         elif strategy == "EMA Crossover":
             fast_p = int(params.get("fast_ema", 9))
             slow_p = int(params.get("slow_ema", 21))
@@ -949,7 +1141,8 @@ class Backtester:
                 exit_reason = None
 
                 # Autonomous Capital Protection: Break-Even Trailing at +1R profit
-                if not be_active and risk_dist > 0:
+                can_trail_be = open_pos.get("allow_be_trailing", True)
+                if can_trail_be and not be_active and risk_dist > 0:
                     if p_type == "BUY" and high_price >= (entry_price + risk_dist):
                         open_pos["sl_price"] = entry_price + spread_cost
                         custom_sl = open_pos["sl_price"]
@@ -1109,6 +1302,7 @@ class Backtester:
                             "tp_price": dyn_tp_val,
                             "risk_dist": risk,
                             "be_active": False,
+                            "allow_be_trailing": bool(prev_row.get("allow_be", True)),
                             "score": confluence_score,
                             "thesis": trade_thesis,
                             "thinking": thinking_data
@@ -1137,6 +1331,7 @@ class Backtester:
                             "tp_price": dyn_tp_val,
                             "risk_dist": risk,
                             "be_active": False,
+                            "allow_be_trailing": bool(prev_row.get("allow_be", True)),
                             "score": confluence_score,
                             "thesis": trade_thesis,
                             "thinking": thinking_data

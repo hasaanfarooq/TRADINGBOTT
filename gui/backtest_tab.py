@@ -187,6 +187,7 @@ class BacktestingTab(tk.Frame):
         self.combo_strategy = ttk.Combobox(
             body,
             values=[
+                "Apex Institutional Matrix (XAUUSD / EURUSD)",
                 "Tick Momentum Scalper",
                 "CRT Range + CISD/FVG (A++ Institutional)",
                 "HTF Bias + Fib 0.77-0.78 OTE",
@@ -198,14 +199,14 @@ class BacktestingTab(tk.Frame):
             font=(FONT_FAMILY, 9),
             state="readonly"
         )
-        self.combo_strategy.set("Tick Momentum Scalper")
+        self.combo_strategy.set("Apex Institutional Matrix (XAUUSD / EURUSD)")
         self.combo_strategy.bind("<<ComboboxSelected>>", self._on_strategy_change)
         self.combo_strategy.pack(fill="x", pady=(2, 8))
 
         # Dynamic Strategy Params Frame
         self.f_strat_params = tk.Frame(body, bg="#F9FAFB", highlightbackground="#E5E7EB", highlightthickness=1, padx=8, pady=6)
         self.f_strat_params.pack(fill="x", pady=(0, 8))
-        self._render_strategy_params("Tick Momentum Scalper")
+        self._render_strategy_params("Apex Institutional Matrix (XAUUSD / EURUSD)")
 
         # Capital Specification (The ONLY user-controlled parameter)
         tk.Label(body, text="CAPITAL ALLOCATION (USER INPUT)", font=(FONT_FAMILY, 8, "bold"), fg="#2563EB", bg="#FFFFFF").pack(anchor="w", pady=(0, 4))
@@ -280,7 +281,7 @@ class BacktestingTab(tk.Frame):
 
         valid_options = self._get_valid_htf_options()
 
-        for widget_name in ("param_crt_htf", "param_fib_htf"):
+        for widget_name in ("param_apex_htf", "param_crt_htf", "param_fib_htf"):
             if hasattr(self, widget_name):
                 w = getattr(self, widget_name)
                 if w.winfo_exists():
@@ -347,7 +348,58 @@ class BacktestingTab(tk.Frame):
         for child in self.f_strat_params.winfo_children():
             child.destroy()
 
-        if strategy == "Tick Momentum Scalper":
+        if strategy == "Apex Institutional Matrix (XAUUSD / EURUSD)":
+            row_badge = tk.Frame(self.f_strat_params, bg="#F9FAFB")
+            row_badge.pack(fill="x", pady=(0, 4))
+            tk.Label(row_badge, text="Apex Institutional Matrix", font=(FONT_FAMILY, 8, "bold"), fg="#2563EB", bg="#F9FAFB").pack(side="left")
+            tk.Label(row_badge, text="Gold & Forex Microstructure", font=(FONT_FAMILY, 8, "bold"), fg="#7C3AED", bg="#F9FAFB").pack(side="right")
+
+            f_spec = tk.Frame(self.f_strat_params, bg="#EEF2FF", highlightbackground="#C7D2FE", highlightthickness=1, padx=6, pady=4)
+            f_spec.pack(fill="x", pady=(0, 4))
+            tk.Label(f_spec, text="• XAUUSD: Asian Breakout & Retest Expansion | 1:2.0 RR Target", font=(FONT_FAMILY, 7, "bold"), fg="#1E40AF", bg="#EEF2FF", anchor="w").pack(fill="x")
+            tk.Label(f_spec, text="• EURUSD: Anchor CRT Sweep + CISD + FVG | 1:1.4+ RR Target", font=(FONT_FAMILY, 7, "bold"), fg="#4338CA", bg="#EEF2FF", anchor="w").pack(fill="x")
+
+            valid_htf = self._get_valid_htf_options()
+            default_htf = "H1 (1 Hour)" if "H1 (1 Hour)" in valid_htf else ("H4 (4 Hours)" if "H4 (4 Hours)" in valid_htf else valid_htf[0])
+
+            row1 = tk.Frame(self.f_strat_params, bg="#F9FAFB")
+            row1.pack(fill="x", pady=(0, 3))
+            tk.Label(row1, text="Anchor Timeframe", font=(FONT_FAMILY, 8, "bold"), fg="#111827", bg="#F9FAFB").pack(side="left")
+            self.param_apex_htf = ttk.Combobox(row1, values=valid_htf, width=13, font=(FONT_FAMILY, 8), state="readonly")
+            self.param_apex_htf.set(default_htf)
+            self.param_apex_htf.pack(side="right")
+
+            row2 = tk.Frame(self.f_strat_params, bg="#F9FAFB")
+            row2.pack(fill="x", pady=(0, 2))
+            exec_name = self.combo_tf.get().split()[0] if hasattr(self, "combo_tf") else "M15"
+            self.lbl_exec_tf = tk.Label(row2, text=f"Execution: {exec_name}", font=(FONT_FAMILY, 8), fg="#4B5563", bg="#F9FAFB")
+            self.lbl_exec_tf.pack(side="left")
+            tk.Label(row2, text="Confluence: D1 + H4 + H1 (>2 TFs)", font=(FONT_FAMILY, 8, "bold"), fg="#059669", bg="#F9FAFB").pack(side="right")
+
+            sep = tk.Frame(self.f_strat_params, bg="#E5E7EB", height=1)
+            sep.pack(fill="x", pady=4)
+
+            self.var_use_reasoning = tk.BooleanVar(value=True)
+            chk_reasoning = tk.Checkbutton(
+                self.f_strat_params,
+                text="Enable A++ Reasoning Engine (Thinking Filter)",
+                variable=self.var_use_reasoning,
+                font=(FONT_FAMILY, 8, "bold"),
+                fg="#1E40AF",
+                bg="#F9FAFB",
+                activebackground="#F9FAFB"
+            )
+            chk_reasoning.pack(anchor="w")
+
+            row_score = tk.Frame(self.f_strat_params, bg="#F9FAFB")
+            row_score.pack(fill="x", pady=(2, 0))
+            tk.Label(row_score, text="Min Confluence Score:", font=(FONT_FAMILY, 8), fg="#4B5563", bg="#F9FAFB").pack(side="left")
+            self.combo_min_score = ttk.Combobox(row_score, values=["50", "55", "60", "65", "70", "75"], width=6, font=(FONT_FAMILY, 8), state="readonly")
+            self.combo_min_score.set("60")
+            self.combo_min_score.pack(side="left", padx=(6, 0))
+            tk.Label(row_score, text="/ 100 pts", font=(FONT_FAMILY, 8), fg="#6B7280", bg="#F9FAFB").pack(side="left")
+
+        elif strategy == "Tick Momentum Scalper":
             row_badge = tk.Frame(self.f_strat_params, bg="#F9FAFB")
             row_badge.pack(fill="x", pady=(0, 4))
             tk.Label(row_badge, text="High-Frequency Tick Scalper", font=(FONT_FAMILY, 8, "bold"), fg="#2563EB", bg="#F9FAFB").pack(side="left")
@@ -1026,7 +1078,26 @@ class BacktestingTab(tk.Frame):
         params = {}
 
         htf_tf = None
-        if strategy_name == "CRT Range + CISD/FVG (A++ Institutional)":
+        if strategy_name == "Apex Institutional Matrix (XAUUSD / EURUSD)":
+            htf_choice = getattr(self, "param_apex_htf", ttk.Combobox()).get() or "H1 (1 Hour)"
+            htf_tf = TIMEFRAME_MAP.get(htf_choice, mt5.TIMEFRAME_H1)
+
+            exec_mins = TF_MINUTES.get(tf, 15)
+            anchor_mins = TF_MINUTES.get(htf_tf, 60)
+            if anchor_mins <= exec_mins:
+                valid_options = self._get_valid_htf_options()
+                htf_choice = valid_options[0]
+                htf_tf = TIMEFRAME_MAP.get(htf_choice, mt5.TIMEFRAME_H4)
+                if hasattr(self, "param_apex_htf"):
+                    self.param_apex_htf.set(htf_choice)
+                self.log_callback(f"[Apex Matrix] Anchor TF must be higher than Execution ({tf_name}). Auto-promoted Anchor to {htf_choice}.", "WARNING")
+
+            params["symbol"] = symbol
+            params["htf_name"] = htf_choice
+            params["use_reasoning"] = getattr(self, "var_use_reasoning", tk.BooleanVar(value=True)).get()
+            params["min_confluence_score"] = int(getattr(self, "combo_min_score", ttk.Combobox()).get() or "60")
+
+        elif strategy_name == "CRT Range + CISD/FVG (A++ Institutional)":
             htf_choice = getattr(self, "param_crt_htf", ttk.Combobox()).get() or "H1 (1 Hour)"
             htf_tf = TIMEFRAME_MAP.get(htf_choice, mt5.TIMEFRAME_H1)
 
@@ -1157,7 +1228,7 @@ class BacktestingTab(tk.Frame):
                 params["df_htf"] = df_htf
 
         # Pre-fetch H1, H4, and D1 for Quantitative Reasoning Engine and Multi-Timeframe Narrative
-        if params.get("use_reasoning", False) or strategy_name.startswith("CRT"):
+        if params.get("use_reasoning", False) or "Apex" in strategy_name or strategy_name.startswith("CRT"):
             self.log_callback("Multi-Timeframe Narrative: Ingesting D1, 4H, and 1H market structure...", "INFO")
             df_h1, _ = self.connector.fetch_historical_data(symbol, mt5.TIMEFRAME_H1, d_from, d_to)
             df_h4, _ = self.connector.fetch_historical_data(symbol, mt5.TIMEFRAME_H4, d_from, d_to)
@@ -1169,6 +1240,7 @@ class BacktestingTab(tk.Frame):
         # 2. Get symbol specifications (point, pip size, contract size)
         s_info = self.connector.get_symbol_info(symbol)
         params["pip_size"] = s_info["pip_size"]
+        params["symbol"] = symbol
 
         # 3. Execute backtesting simulation
         bt = Backtester(
